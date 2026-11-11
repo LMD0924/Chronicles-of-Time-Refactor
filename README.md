@@ -67,9 +67,10 @@ Chronicles-of-Time/
 cd back-end-spring-cloud
 mvn -B clean package
 
-# 方式一：MySQL 8（默认；需先创建库 chronicles_of_time）
-export COT_DB_URL='jdbc:mysql://localhost:3306/chronicles_of_time?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai'
-export COT_DB_USER=root COT_DB_PASSWORD=<你的密码>
+# 方式一：MySQL 8（默认；URL 已带 createDatabaseIfNotExist=true，首次启动自动建库）
+# root 密码必须走环境变量，默认空密码会报 Access denied；不要把密码写进配置文件提交到仓库
+export COT_DB_USER=root COT_DB_PASSWORD=<你的密码>    # Windows: setx COT_DB_PASSWORD "你的密码"
+# 需要改连接串时再覆盖 COT_DB_URL
 java -jar launcher/target/cot-launcher-0.1.0-SNAPSHOT.jar
 
 # 方式二：零外部依赖演示（H2 文件库 + 同一套 Flyway 迁移）
@@ -87,7 +88,8 @@ npm run dev          # http://localhost:5173
 npm run build        # 产物 dist/
 ```
 
-Flyway 在启动时自动建表并写入演示数据，无需手工执行 SQL。
+Flyway 在启动时自动建表并写入演示数据，无需手工执行 SQL；`chronicles_of_time` 库由
+`createDatabaseIfNotExist=true` 自动创建，也可预先手动建。
 JWT 密钥走 `COT_AUTH_SECRET`（**生产必须覆盖开发默认值**），上传目录走 `COT_UPLOAD_DIR`。
 
 ### 端口说明（重要）
