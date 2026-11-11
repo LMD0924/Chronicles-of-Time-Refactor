@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.chroniclesoftime</groupId>
+        <artifactId>cot-backend</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+    <artifactId>cot-launcher</artifactId>
+    <name>cot-launcher</name>
+    <description>拾光记 · launcher 限界上下文</description>
+    <dependencies>
+        <dependency><groupId>com.chroniclesoftime</groupId><artifactId>cot-common-core</artifactId></dependency>
+        <dependency><groupId>com.chroniclesoftime</groupId><artifactId>cot-api</artifactId></dependency>
+        <dependency><groupId>com.chroniclesoftime</groupId><artifactId>cot-gateway</artifactId></dependency>
+        <dependency><groupId>com.chroniclesoftime</groupId><artifactId>cot-identity</artifactId></dependency>
+        <dependency><groupId>com.chroniclesoftime</groupId><artifactId>cot-timeline</artifactId></dependency>
+        <dependency><groupId>com.chroniclesoftime</groupId><artifactId>cot-learning</artifactId></dependency>
+        <dependency><groupId>com.chroniclesoftime</groupId><artifactId>cot-planning</artifactId></dependency>
+        <dependency><groupId>com.chroniclesoftime</groupId><artifactId>cot-archive</artifactId></dependency>
+        <dependency><groupId>com.chroniclesoftime</groupId><artifactId>cot-community</artifactId></dependency>
+        <dependency><groupId>com.chroniclesoftime</groupId><artifactId>cot-file</artifactId></dependency>
+        <dependency><groupId>org.flywaydb</groupId><artifactId>flyway-core</artifactId></dependency>
+        <dependency><groupId>org.flywaydb</groupId><artifactId>flyway-mysql</artifactId></dependency>
+        <dependency><groupId>com.mysql</groupId><artifactId>mysql-connector-j</artifactId><scope>runtime</scope></dependency>
+        <dependency><groupId>com.h2database</groupId><artifactId>h2</artifactId><scope>runtime</scope></dependency>
+        <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-actuator</artifactId></dependency>
+    </dependencies>
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <mainClass>com.chroniclesoftime.CotApplication</mainClass>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

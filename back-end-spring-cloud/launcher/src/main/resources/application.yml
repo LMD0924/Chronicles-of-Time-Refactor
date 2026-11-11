@@ -1,0 +1,58 @@
+server:
+  port: 8080
+  error:
+    include-message: never
+
+spring:
+  application:
+    name: chronicles-of-time
+  profiles:
+    active: ${COT_PROFILE:mysql}
+  # Spring Cloud 依赖保留但默认关闭；需要拆分微服务时再启用注册发现
+  cloud:
+    enabled: false
+    discovery:
+      enabled: false
+  data:
+    redis:
+      host: ${COT_REDIS_HOST:localhost}
+      port: ${COT_REDIS_PORT:6379}
+      database: 0
+      # 允许未启动 Redis 时应用仍可启动（懒连接）
+      repositories:
+        enabled: false
+  datasource:
+    url: ${COT_DB_URL:jdbc:mysql://localhost:3306/chronicles_of_time?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&allowMultiQueries=true}
+    username: ${COT_DB_USER:root}
+    password: ${COT_DB_PASSWORD:}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+  jackson:
+    default-property-inclusion: non_null
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 40MB
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      id-type: auto
+
+cot:
+  auth:
+    secret: ${COT_AUTH_SECRET:cot-dev-secret-change-me-in-production-2026}
+    ttl-hours: 12
+  storage:
+    dir: ${COT_UPLOAD_DIR:./uploads}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

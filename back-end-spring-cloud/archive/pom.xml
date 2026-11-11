@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.chroniclesoftime</groupId>
+        <artifactId>cot-backend</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+    <artifactId>cot-archive</artifactId>
+    <name>cot-archive</name>
+    <description>拾光记 · archive 限界上下文</description>
+    <dependencies>
+        <dependency><groupId>com.chroniclesoftime</groupId><artifactId>cot-common-core</artifactId></dependency>
+        <dependency><groupId>com.chroniclesoftime</groupId><artifactId>cot-api</artifactId></dependency>
+        <!-- 简历聚合需要读取 identity 上下文的简历段，属于单向跨域查询 -->
+        <dependency><groupId>com.chroniclesoftime</groupId><artifactId>cot-identity</artifactId></dependency>
+    </dependencies>
+</project>

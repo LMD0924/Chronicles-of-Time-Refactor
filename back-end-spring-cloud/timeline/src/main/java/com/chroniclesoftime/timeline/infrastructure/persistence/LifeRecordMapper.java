@@ -1,0 +1,8 @@
+package com.chroniclesoftime.timeline.infrastructure.persistence;
+
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.chroniclesoftime.timeline.domain.model.LifeRecord;
+import org.apache.ibatis.annotations.Mapper;
+
+@Mapper
+public interface LifeRecordMapper extends BaseMapper<LifeRecord> {}

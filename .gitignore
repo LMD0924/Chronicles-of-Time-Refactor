@@ -1,0 +1,26 @@
+# 构建产物
+target/
+**/target/
+*.class
+*.jar
+node_modules/
+dist/
+.vite/
+
+# IDE / 系统
+.DS_Store
+*.log
+.idea/
+*.iml
+.vscode/
+
+# 运行时数据（相对 JVM 工作目录，位于 back-end-spring-cloud/ 下）
+**/data/*.mv.db
+**/data/*.trace.db
+**/data/*.lock.db
+**/uploads/*
+!**/uploads/.gitkeep
+
+# 本地环境
+.env
+.env.local

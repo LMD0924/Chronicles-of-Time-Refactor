@@ -1,0 +1,15 @@
+# 本地零依赖演示 profile：H2 文件库 + 同一套 Flyway 迁移
+# java -jar ... --spring.profiles.active=dev
+spring:
+  datasource:
+    url: jdbc:h2:file:./data/cot;MODE=MySQL;DATABASE_TO_LOWER=TRUE;AUTO_SERVER=TRUE;DB_CLOSE_DELAY=-1;NON_KEYWORDS=LEVEL,VALUE,KEY
+    username: sa
+    password: ''
+    driver-class-name: org.h2.Driver
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  h2:
+    console:
+      enabled: true
+      path: /h2-console

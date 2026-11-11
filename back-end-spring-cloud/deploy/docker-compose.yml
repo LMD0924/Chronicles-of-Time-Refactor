@@ -1,0 +1,20 @@
+# 可选：本地 MySQL 8 + Redis。P1 主链路不依赖容器（dev profile 可直接用 H2）。
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: cot-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: cot_dev_password
+      MYSQL_DATABASE: chronicles_of_time
+      TZ: Asia/Shanghai
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./mysql-data:/var/lib/mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+
+  redis:
+    image: redis:7-alpine
+    container_name: cot-redis
+    ports:
+      - "6379:6379"
