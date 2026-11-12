@@ -26,6 +26,9 @@ public class AnswerRecord {
     private Long durationMs;
     @TableField("answered_at")
     private String answeredAt;
+    /** V6 新增：所属练习场次，用于逐题回看与场次正确率统计。 */
+    @TableField("session_id")
+    private Long sessionId;
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -44,4 +47,6 @@ public class AnswerRecord {
     public void setDurationMs(Long v) { this.durationMs = v; }
     public String getAnsweredAt() { return answeredAt; }
     public void setAnsweredAt(String v) { this.answeredAt = v; }
+    public Long getSessionId() { return sessionId; }
+    public void setSessionId(Long v) { this.sessionId = v; }
 }

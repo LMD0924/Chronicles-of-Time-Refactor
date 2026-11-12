@@ -99,6 +99,53 @@ public class LearningApplicationService {
                 .collect(Collectors.toList());
     }
 
+    /** 按账号隔离的数据视图；管理员显式 all=true 时可跨账号核查，未登录返回空。 */
+    public List<Map<String, Object>> rowsScoped(String resource, boolean all) {
+        boolean crossAccount = all && AuthContext.isAdmin();
+        if (!crossAccount && AuthContext.userId() == null) return List.of();
+        return list(resource, crossAccount, null).stream()
+                .map(r -> (Map<String, Object>) json.convertValue(r, Map.class))
+                .collect(Collectors.toList());
+    }
+
+    /** 按单列精确查找（工作流内部使用，如 question_id 去重、session_id 回看）。 */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public List<Map<String, Object>> findBy(String resource, String column, Object value) {
+        Repository raw = require(resource);
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Object row : raw.findBy(column, value)) {
+            out.add((Map<String, Object>) json.convertValue(row, Map.class));
+        }
+        return out;
+    }
+
+    /** 答错时按 question_id 去重：已有错题累加复习次数并重置掌握状态，否则新建。 */
+    public void upsertMistake(Map<String, Object> question, String now) {
+        Long qid = longOf(question.get("id"));
+        if (qid == null) return;
+        List<Map<String, Object>> existing = findBy("mistakes", "question_id", qid);
+        Map<String, Object> mistake = new LinkedHashMap<>();
+        if (!existing.isEmpty()) {
+            Map<String, Object> old = existing.get(0);
+            mistake.put("id", longOf(old.get("id")));
+            mistake.put("reviewCount", (old.get("reviewCount") instanceof Number n ? n.intValue() : 0) + 1);
+        } else {
+            mistake.put("reviewCount", 1);
+            mistake.put("createdAt", now);
+        }
+        mistake.put("questionId", qid);
+        mistake.put("knowledgePoint", question.get("knowledgePoint"));
+        mistake.put("reason", "答案错误");
+        mistake.put("mastered", false);
+        mistake.put("lastReviewAt", now);
+        save("mistakes", mistake);
+    }
+
+    private static Long longOf(Object o) {
+        if (o instanceof Number n) return n.longValue();
+        return null;
+    }
+
     private Repository require(String resource) {
         Repository r = repos.get(resource);
         if (r == null) throw new IllegalArgumentException("未知资源: " + resource);

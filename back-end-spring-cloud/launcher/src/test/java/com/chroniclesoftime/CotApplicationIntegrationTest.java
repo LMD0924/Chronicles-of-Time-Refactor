@@ -14,7 +14,9 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -404,5 +406,164 @@ class CotApplicationIntegrationTest {
                 .andExpect(jsonPath("$.code").value(200))
                 .andReturn();
         return json.readTree(r.getResponse().getContentAsString()).path("data").path("id").asLong();
+    }
+
+    // ---------- 批次 2：学习完整链路 ----------
+    private static long probeSessionId;
+    private static long probeMistakeId;
+
+    @Test @Order(15)
+    void practiceWorkflowSyncsSessionAnswersAndMistakes() throws Exception {
+        String user = login(USER, USER_PW);
+        List<Map<String, Object>> imported = List.of(
+                question("BATCH2_PROBE", "KP_A", "Q1", "A"),
+                question("BATCH2_PROBE", "KP_B", "Q2", "B"));
+        mvc.perform(post("/api/v1/learning/questions/import")
+                        .header("Authorization", "Bearer " + user)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of("questions", imported))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.created").value(2));
+
+        Map<String, Object> start = new LinkedHashMap<>();
+        start.put("subject", "BATCH2_PROBE"); start.put("size", 2); start.put("title", "批次2联动测试");
+        MvcResult r = mvc.perform(post("/api/v1/learning/practice/start")
+                        .header("Authorization", "Bearer " + user)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(start)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andReturn();
+        JsonNode data = json.readTree(r.getResponse().getContentAsString()).path("data");
+        probeSessionId = data.path("sessionId").asLong();
+        JsonNode qs = data.path("questions");
+        assertTrue(probeSessionId > 0, "应创建练习场次");
+        assertEquals(2, qs.size());
+        assertFalse(qs.get(0).has("answer"), "组卷返回的题目不得包含答案");
+
+        List<Map<String, Object>> answers = new ArrayList<>();
+        for (JsonNode q : qs) {
+            Map<String, Object> a = new LinkedHashMap<>();
+            a.put("questionId", q.path("id").asLong());
+            a.put("userAnswer", "Q1".equals(q.path("title").asText()) ? "A" : "Z");
+            a.put("durationMs", 1200);
+            answers.add(a);
+        }
+        mvc.perform(post("/api/v1/learning/practice/" + probeSessionId + "/submit")
+                        .header("Authorization", "Bearer " + user)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of("answers", answers))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(2))
+                .andExpect(jsonPath("$.data.correctCount").value(1))
+                .andExpect(jsonPath("$.data.results.length()").value(2));
+
+        assertEquals(1, jdbc.queryForObject("select correct_count from practice_session where id = ?",
+                Integer.class, probeSessionId), "场次正确数应回填");
+        assertNotNull(jdbc.queryForObject("select finished_at from practice_session where id = ?",
+                String.class, probeSessionId), "交卷后应有结束时间");
+        assertEquals(2, jdbc.queryForObject("select count(*) from answer_records where session_id = ?",
+                Integer.class, probeSessionId), "逐题记录必须带上 session_id");
+        assertEquals(1, jdbc.queryForObject(
+                "select count(*) from mistake_record where question_id in (select id from question_bank where subject = 'BATCH2_PROBE')",
+                Integer.class), "答错一题应只生成一条错题");
+        probeMistakeId = jdbc.queryForObject(
+                "select id from mistake_record where question_id in (select id from question_bank where subject = 'BATCH2_PROBE') limit 1",
+                Long.class);
+
+        // 状态机：同一场次不得重复交卷
+        mvc.perform(post("/api/v1/learning/practice/" + probeSessionId + "/submit")
+                        .header("Authorization", "Bearer " + user)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of("answers", answers))))
+                .andExpect(jsonPath("$.code").value(409));
+    }
+
+    @Test @Order(16)
+    void sessionDetailReplaysEachQuestion() throws Exception {
+        String user = login(USER, USER_PW);
+        JsonNode data = getJson("/api/v1/learning/practice/sessions/" + probeSessionId, user, 200).path("data");
+        assertEquals(2, data.path("items").size(), "场次回看应带出两道题的记录");
+        boolean hasAnswer = false;
+        for (JsonNode item : data.path("items")) if (item.has("answer")) hasAnswer = true;
+        assertTrue(hasAnswer, "回看应 join 出正确答案与解析");
+        JsonNode sessions = getJson("/api/v1/learning/practice/sessions", user, 200).path("data");
+        assertTrue(sessions.isArray() && !sessions.isEmpty());
+    }
+
+    @Test @Order(17)
+    void mistakeReviewAndMasteryToggle() throws Exception {
+        String user = login(USER, USER_PW);
+        int before = jdbc.queryForObject("select review_count from mistake_record where id = ?",
+                Integer.class, probeMistakeId);
+        mvc.perform(post("/api/v1/learning/mistakes/" + probeMistakeId + "/review")
+                        .header("Authorization", "Bearer " + user))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+        assertEquals(before + 1, jdbc.queryForObject("select review_count from mistake_record where id = ?",
+                Integer.class, probeMistakeId), "复习次数应累加");
+
+        mvc.perform(put("/api/v1/learning/mistakes/" + probeMistakeId + "/mastered")
+                        .header("Authorization", "Bearer " + user)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"mastered\":true}"))
+                .andExpect(jsonPath("$.code").value(200));
+        assertEquals(1, jdbc.queryForObject("select count(*) from mistake_record where id = ? and mastered = 1",
+                Integer.class, probeMistakeId), "应标记为已掌握");
+
+        mvc.perform(put("/api/v1/learning/mistakes/" + probeMistakeId + "/mastered")
+                        .header("Authorization", "Bearer " + user)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"mastered\":false}"))
+                .andExpect(jsonPath("$.code").value(200));
+        assertEquals(0, jdbc.queryForObject("select count(*) from mistake_record where id = ? and mastered = 1",
+                Integer.class, probeMistakeId), "应能移回待复习");
+    }
+
+    @Test @Order(18)
+    void questionImportReportsPerItemErrors() throws Exception {
+        String user = login(USER, USER_PW);
+        Map<String, Object> bad = new LinkedHashMap<>();
+        bad.put("subject", "BATCH2_IMPORT"); bad.put("title", "缺少答案的题目");
+        List<Map<String, Object>> payload = List.of(question("BATCH2_IMPORT", "KP_C", "Q3", "A"), bad);
+        mvc.perform(post("/api/v1/learning/questions/import")
+                        .header("Authorization", "Bearer " + user)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of("questions", payload))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.created").value(1))
+                .andExpect(jsonPath("$.data.failed").value(1))
+                .andExpect(jsonPath("$.data.errors[0].reason").exists());
+    }
+
+    @Test @Order(19)
+    void learningFeatureEndpointsAreAccountScoped() throws Exception {
+        String admin = login(ADMIN, ADMIN_PW);
+        mvc.perform(post("/api/v1/learning/questions/import")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of("questions",
+                                List.of(question("ADMIN_LEARNING_ONLY", "KP_X", "ADMIN_Q", "A"))))))
+                .andExpect(jsonPath("$.data.created").value(1));
+        try {
+            String user = login(USER, USER_PW);
+            JsonNode facets = getJson("/api/v1/learning/questions/facets", user, 200).path("data");
+            assertFalse(facets.path("subjects").toString().contains("ADMIN_LEARNING_ONLY"),
+                    "普通用户的题库字典不得包含其他账号的数据");
+            JsonNode random = getJson("/api/v1/learning/random-questions?subject=ADMIN_LEARNING_ONLY&size=5", user, 200).path("data");
+            assertEquals(0, random.size(), "随机抽题不得泄露其他账号题目");
+        } finally {
+            jdbc.update("delete from question_bank where subject = 'ADMIN_LEARNING_ONLY'");
+        }
+    }
+
+    private Map<String, Object> question(String subject, String kp, String title, String answer) {
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("subject", subject); q.put("knowledgePoint", kp);
+        q.put("title", title); q.put("content", "题干 " + title);
+        q.put("optionsJson", List.of("A. 对", "B. 错"));
+        q.put("answer", answer); q.put("explanation", "解析 " + title);
+        q.put("difficulty", "中等"); q.put("source", "集成测试");
+        return q;
     }
 }
