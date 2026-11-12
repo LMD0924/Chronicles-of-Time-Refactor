@@ -1,7 +1,7 @@
 # 生产 / 本地 MySQL 8 配置（默认 profile）
 spring:
   datasource:
-    url: ${COT_DB_URL:jdbc:mysql://localhost:3306/chronicles_of_time?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&allowMultiQueries=true}
+    url: ${COT_DB_URL:jdbc:mysql://localhost:3306/chronicles_of_time?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&allowMultiQueries=true&createDatabaseIfNotExist=true}
     username: ${COT_DB_USER:root}
     password: ${COT_DB_PASSWORD:}
     driver-class-name: com.mysql.cj.jdbc.Driver

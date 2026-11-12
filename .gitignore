@@ -21,6 +21,7 @@ dist/
 **/uploads/*
 !**/uploads/.gitkeep
 
-# 本地环境
+# 本地环境（含数据库密码，切勿提交）
 .env
 .env.local
+cot-local.yml

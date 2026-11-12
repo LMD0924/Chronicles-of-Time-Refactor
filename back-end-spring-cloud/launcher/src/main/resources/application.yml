@@ -8,6 +8,12 @@ spring:
     name: chronicles-of-time
   profiles:
     active: ${COT_PROFILE:mysql}
+  # 本地私密配置（已被 .gitignore 排除）：提供 COT_DB_PASSWORD 等本机值。
+  # 文件不存在时不影响启动；命令行 / CI 仍可用同名环境变量覆盖（环境变量优先级更高）。
+  config:
+    import:
+      - optional:file:./cot-local.yml
+      - optional:file:../cot-local.yml
   # Spring Cloud 依赖保留但默认关闭；需要拆分微服务时再启用注册发现
   cloud:
     enabled: false
