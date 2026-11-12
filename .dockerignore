@@ -1,0 +1,45 @@
+# ============================================================
+# 项目根 .dockerignore
+# compose 的 build.context 是 ../..（项目根），本文件对两个镜像的构建上下文生效。
+# 目标：只把源码、pom、前端清单、nginx.conf 送进构建，剔除产物 / 私密 / 运行时数据。
+# 注意：不要排除 front-end/src、front-end/package*.json、
+#       back-end-spring-cloud/** 源码与 pom，否则镜像构建会缺文件。
+# ============================================================
+
+# 版本控制与 CI 元数据
+.git
+.github
+.gitattributes
+
+# IDE / 编辑器
+.idea
+.vscode
+*.iml
+.DS_Store
+*.swp
+*.swo
+*~
+
+# 构建产物（任意层级）
+**/target
+**/node_modules
+**/dist
+.vite
+
+# 本地私密配置与环境文件
+cot-local.yml
+.env
+.env.*
+*.log
+
+# 运行时数据：仅排除「项目根」的 data/ 与 uploads/，
+# 不用 **/data、/uploads 这类宽泛模式，避免误伤后端源码目录。
+/data
+/uploads
+# H2 文件库数据文件（dev profile 位于 back-end-spring-cloud/data/）
+**/data/*.mv.db
+**/data/*.trace.db
+**/data/*.lock.db
+
+# MySQL 数据卷（compose 里 mysql 的 bind mount，首次启动后在 deploy/ 下生成）
+back-end-spring-cloud/deploy/mysql-data

@@ -1,0 +1,32 @@
+# 后端多阶段构建：Maven 编译 -> 精简 JRE 运行
+# build context 是「项目根」（见 deploy/docker-compose.yml 的 build.context: ../..），
+# 因此所有 COPY 源路径都从项目根开始写，而不是从本 deploy/ 目录开始。
+# 项目根 .dockerignore 会剔除 target/、node_modules/、dist/、运行时数据等。
+
+FROM maven:3.9-eclipse-temurin-17 AS build
+WORKDIR /build
+# 直接复制整个后端工程，简单可靠（多模块 reactor 需要父 POM + 所有子模块源码）
+COPY back-end-spring-cloud/ /build/back-end-spring-cloud/
+RUN mvn -B -q -f back-end-spring-cloud/pom.xml clean package -DskipTests
+
+FROM eclipse-temurin:17-jre-jammy AS runtime
+WORKDIR /app
+
+# compose 的 backend.healthcheck 用 wget 探测 /actuator/health。
+# 精简 JRE 镜像不保证自带 curl/wget，这里显式安装 wget 以保证探针一定可用。
+# 若主流程希望去掉 apt 步骤，可删除本 RUN 的 apt 部分，并相应移除 compose 里
+# backend 的 healthcheck（详见交付报告中的风险说明）。
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends wget \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /app/uploads /app/logs
+
+# 全工程唯一可执行 jar（launcher 模块）
+COPY --from=build /build/back-end-spring-cloud/launcher/target/cot-launcher-0.1.0-SNAPSHOT.jar /app/app.jar
+
+EXPOSE 8080
+
+# 故意不在镜像内写 HEALTHCHECK：探针的间隔 / 超时 / 启动宽限期交给编排层
+# （docker-compose.yml 的 backend.healthcheck）统一配置，便于按环境调整，
+# 也避免把探测策略硬编码进镜像。
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]

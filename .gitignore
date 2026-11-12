@@ -25,3 +25,7 @@ dist/
 .env
 .env.local
 cot-local.yml
+
+# Docker 本地数据卷（compose 从项目根执行时生成）
+back-end-spring-cloud/deploy/mysql-data/
+back-end-spring-cloud/deploy/logs/

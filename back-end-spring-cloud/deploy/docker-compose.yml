@@ -1,20 +1,110 @@
-# 可选：本地 MySQL 8 + Redis。P1 主链路不依赖容器（dev profile 可直接用 H2）。
+# 拾光记 · 一键编排：mysql + redis + backend + web（共 4 个服务）
+# 从【项目根】执行：
+#   docker compose -f back-end-spring-cloud/deploy/docker-compose.yml up -d --build
+#
+# ⚠ 本文件里所有明文默认值都「仅用于本地开发一键启动」，绝不可用于生产：
+#   MYSQL_ROOT_PASSWORD、COT_DB_PASSWORD、COT_AUTH_SECRET、COT_REDIS_PASSWORD
+#   生产必须通过环境变量 / Docker secrets / CI 注入覆盖。
+#
+# build.context: ../.. 表示「相对本文件所在的 deploy/ 目录，向上两级 = 项目根」；
+# 两个 Dockerfile 与 nginx.conf 都在 deploy/ 下，dockerfile 路径同样相对项目根书写。
+
 services:
   mysql:
     image: mysql:8.0
     container_name: cot-mysql
+    restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: cot_dev_password
+      # 仅本地开发用密码；生产必须用 secrets / 环境变量替换
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:-cot_dev_password}"
       MYSQL_DATABASE: chronicles_of_time
       TZ: Asia/Shanghai
     ports:
       - "3306:3306"
     volumes:
+      # 保留原有本地数据卷（相对 deploy/ 目录）
       - ./mysql-data:/var/lib/mysql
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      # $$ 是 compose 转义：由容器内 shell 展开 MYSQL_ROOT_PASSWORD，而不是被 compose 插值
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   redis:
     image: redis:7-alpine
     container_name: cot-redis
+    restart: unless-stopped
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  backend:
+    build:
+      context: ../..
+      dockerfile: back-end-spring-cloud/deploy/Dockerfile.backend
+    container_name: cot-backend
+    restart: unless-stopped
+    # Dockerfile 的 ENTRYPOINT 是 ["java","-jar","/app/app.jar"]，
+    # command 追加参数即可激活 prod profile（命令行优先级高于 application.yml）。
+    command: ["--spring.profiles.active=prod"]
+    environment:
+      # === 以下默认值全部「仅本地开发用」，生产务必用环境变量 / secrets 覆盖 ===
+      COT_DB_URL: "${COT_DB_URL:-jdbc:mysql://mysql:3306/chronicles_of_time?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&allowMultiQueries=true&createDatabaseIfNotExist=true}"
+      COT_DB_USER: "${COT_DB_USER:-root}"
+      COT_DB_PASSWORD: "${COT_DB_PASSWORD:-cot_dev_password}"
+      # prod profile 中 COT_AUTH_SECRET 无默认值，缺失会直接启动失败；
+      # 这里给出「明显仅本地开发」的占位值，生产必须替换为高强度随机值并走 secrets 注入。
+      COT_AUTH_SECRET: "${COT_AUTH_SECRET:-cot-LOCAL-DEV-ONLY-change-me-before-production}"
+      COT_AUTH_TTL_HOURS: "${COT_AUTH_TTL_HOURS:-12}"
+      COT_REDIS_HOST: "${COT_REDIS_HOST:-redis}"
+      COT_REDIS_PORT: "${COT_REDIS_PORT:-6379}"
+      # redis 容器本地未开启 requirepass，故留空；生产需设密码并同步给 redis 服务
+      COT_REDIS_PASSWORD: "${COT_REDIS_PASSWORD:-}"
+      COT_UPLOAD_DIR: "${COT_UPLOAD_DIR:-/app/uploads}"
+      COT_LOG_FILE: "${COT_LOG_FILE:-/app/logs/cot.log}"
+      # 容器内部端口固定 8080：与 EXPOSE 8080、nginx.conf 的 proxy_pass、下方 ports 一致。
+      # 改动本值必须同步改 nginx.conf 与 ports，本地部署不建议改。
+      COT_SERVER_PORT: "${COT_SERVER_PORT:-8080}"
+      # 置为 false 可在 Redis 不可用时避免 /actuator/health 整体 DOWN
+      COT_HEALTH_REDIS_ENABLED: "${COT_HEALTH_REDIS_ENABLED:-true}"
+    ports:
+      - "8080:8080"
+    volumes:
+      - cot-uploads:/app/uploads
+      - cot-logs:/app/logs
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # Dockerfile.backend 已显式安装 wget，保证该探针可用
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+
+  web:
+    build:
+      context: ../..
+      dockerfile: back-end-spring-cloud/deploy/Dockerfile.frontend
+    container_name: cot-web
+    restart: unless-stopped
+    # 默认把宿主机 5173 映射到容器 80：与 Vite dev server 端口一致，便于记忆；
+    # 二者不要同时运行，端口冲突时可用 COT_WEB_PORT 覆盖（如 COT_WEB_PORT=80）。
+    ports:
+      - "${COT_WEB_PORT:-5173}:80"
+    depends_on:
+      - backend
+
+volumes:
+  cot-uploads:
+  cot-logs:

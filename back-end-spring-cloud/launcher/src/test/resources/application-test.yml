@@ -1,0 +1,38 @@
+# 集成测试专用 profile：H2 内存库 + 同一套 Flyway 迁移，不依赖本机 MySQL / Redis。
+# 通过 @SpringBootTest(properties = "spring.profiles.active=test") 激活。
+spring:
+  datasource:
+    url: jdbc:h2:mem:cot_it;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1;NON_KEYWORDS=LEVEL,VALUE,KEY
+    username: sa
+    password: ''
+    driver-class-name: org.h2.Driver
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      repositories:
+        enabled: false
+  h2:
+    console:
+      enabled: false
+
+management:
+  health:
+    redis:
+      enabled: false
+
+cot:
+  auth:
+    secret: integration-test-secret-do-not-use-in-production
+    ttl-hours: 12
+  storage:
+    dir: ./uploads-test
+
+logging:
+  level:
+    root: WARN
+    com.chroniclesoftime: WARN

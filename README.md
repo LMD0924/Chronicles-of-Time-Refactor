@@ -17,10 +17,10 @@
 |---|---|
 | 后端 | Spring Boot 3.5.11 · Spring Cloud 2025.0.1（依赖保留、默认关闭）· Maven 多模块 · Java 17 |
 | 运行形态 | **混合 DDD 模块化单体**：平铺限界上下文 + 唯一 `launcher` 启动类、唯一 8080 端口、唯一可执行 jar |
-| 持久层 | MyBatis-Plus 3.5.9 + MySQL 8 单库 + Flyway 自动迁移；`dev` profile 可切 H2 文件库 |
+| 持久层 | MyBatis-Plus 3.5.9 + MySQL 8 单库 + Flyway 自动迁移（V1–V5）；`dev` / 测试可切 H2 文件库或内存库 |
 | 认证 | PBKDF2WithHmacSHA256 密码哈希 + 纯 JDK HS256 JWT + 三级路径拦截器 + `token_version` 主动失效 |
 | 前端 | Vue 3 · Vite 5 · **JavaScript** · TailwindCSS 3 · Pinia · Vue Router · Axios · ECharts 5（按需引入）· markdown-it |
-| 基础设施 | Redis（保留，懒连接）；P2 起可演进 Nacos / Gateway / Elasticsearch / MinIO |
+| 基础设施 | Redis（保留，懒连接）；Docker Compose 四服务（mysql / redis / backend / web）、GitHub Actions CI、H2 全链路集成测试；P2 起可演进 Nacos / Gateway / Elasticsearch / MinIO |
 
 用户与管理员**共用同一个前端**：管理员登录后在同一套导航里多出「管理后台」入口，不另建前端工程。
 
@@ -39,12 +39,14 @@ Chronicles-of-Time/
 │   ├── archive/                     # 档案：简历、证书、课程树、论文、看板、选课参考
 │   ├── community/                   # 社区：内容、评论、点赞、收藏、文章图谱
 │   ├── file/                        # 图片 / 文件 / 批量上传
-│   ├── launcher/                    # ★ 唯一启动类、唯一配置、Flyway V1/V2
-│   │   └── src/main/resources/db/migration/
-│   ├── sql/                         # 生产索引参考脚本（不参与启动）
-│   ├── deploy/                      # docker-compose（MySQL / Redis）
+│   ├── launcher/                    # ★ 唯一启动类、唯一配置、Flyway V1–V5
+│   │   ├── src/main/resources/      # application.yml / -mysql / -dev / -prod
+│   │   ├── src/main/resources/db/migration/
+│   │   └── src/test/                # H2 全链路集成测试 + test profile
+│   ├── sql/                         # 索引参考脚本（等价内容已由 V5 自动迁移）
+│   ├── deploy/                      # docker-compose 四服务 + 2 个 Dockerfile + nginx.conf
 │   └── docs/后端模块总览.md
-├── front-end/                       # Vue 3 SPA（Vite 5）
+├── front-end/                       # Vue 3 SPA（Vite 5，package-lock.json 已提交）
 │   └── src/
 │       ├── config/navigation.js     # 顶部导航 + 悬停 Mega Menu 配置
 │       ├── components/ResourcePage.vue  # 通用 CRUD 页面（列表/搜索/新增/编辑/删除/批量删除）
@@ -52,8 +54,10 @@ Chronicles-of-Time/
 │       ├── layouts/DefaultLayout.vue    # 时间轴卷轴过渡
 │       ├── views/                   # 55 个页面（含 views/admin/ 7 页）
 │       └── style.css                # 与 AdmitAtlas 一致的视觉 token + 卷轴过渡
-├── docs/                            # 全部设计文档（中文）
-└── README.md / LICENSE / .gitignore
+├── docs/                            # 全部设计文档（中文，含部署指南）
+├── .github/workflows/ci.yml         # 后端 mvn test + 前端 npm ci && build
+├── .env.example                     # 环境变量清单（.env / cot-local.yml 均被 gitignore）
+└── README.md / LICENSE / .gitignore / .dockerignore
 ```
 
 每个业务模块内部为严格四层：`interfaces / application / domain(model+repository) / infrastructure(persistence)`。
@@ -63,9 +67,12 @@ Chronicles-of-Time/
 ## 快速开始
 
 ```bash
-# 后端：编译 12 个 Reactor 模块并运行单元测试（JDK 17+、Maven 3.8+）
+# 环境变量清单见 .env.example；docker compose 会自动读取同目录的 .env
+cp .env.example .env              # 按需修改，切勿提交真实密码 / JWT 密钥
+
+# 后端：编译 12 个 Reactor 模块并运行测试（JDK 17+、Maven 3.8+）
 cd back-end-spring-cloud
-mvn -B clean package
+mvn -B clean package             # 含 15 个测试（工具类 + H2 全链路集成测试）
 
 # 方式一：MySQL 8（默认；URL 已带 createDatabaseIfNotExist=true，首次启动自动建库）
 # root 密码必须走环境变量，默认空密码会报 Access denied；不要把密码写进配置文件提交到仓库
@@ -76,21 +83,39 @@ java -jar launcher/target/cot-launcher-0.1.0-SNAPSHOT.jar
 # 方式二：零外部依赖演示（H2 文件库 + 同一套 Flyway 迁移）
 java -jar launcher/target/cot-launcher-0.1.0-SNAPSHOT.jar --spring.profiles.active=dev
 
+# 方式三：生产 profile（所有敏感值必须来自环境变量，缺失 COT_AUTH_SECRET 会直接启动失败）
+# java -jar launcher/target/cot-launcher-0.1.0-SNAPSHOT.jar --spring.profiles.active=prod
+
 # 验证
 curl http://localhost:8080/actuator/health
 curl http://localhost:8080/api/v1/system/modules
 curl http://localhost:8080/api/v1/dashboard
 
-# 前端（Node 20+）
+# 前端（Node 20+；已提交 package-lock.json，用 npm ci 保证版本一致）
 cd ../front-end
-npm install
+npm ci
 npm run dev          # http://localhost:5173
 npm run build        # 产物 dist/
 ```
 
-Flyway 在启动时自动建表并写入演示数据，无需手工执行 SQL；`chronicles_of_time` 库由
-`createDatabaseIfNotExist=true` 自动创建，也可预先手动建。
-JWT 密钥走 `COT_AUTH_SECRET`（**生产必须覆盖开发默认值**），上传目录走 `COT_UPLOAD_DIR`。
+Flyway V1–V5 在启动时自动建表、写入演示数据并建立索引，无需手工执行 SQL；
+`chronicles_of_time` 库由 `createDatabaseIfNotExist=true` 自动创建，也可预先手动建。
+`sql/indexes.sql` 仅作参考，等价索引已由 V5 自动迁移。
+JWT 密钥走 `COT_AUTH_SECRET`（**生产必须覆盖开发默认值，prod profile 下缺失即启动失败**），
+上传目录走 `COT_UPLOAD_DIR`。注意：直接 `java -jar` 时 Spring **不会读取 `.env`**，
+请注入环境变量，或按 `.gitignore` 规则在项目根放 `cot-local.yml`；`.env` 主要供 docker compose 使用。
+
+### 一行命令启动全套（Docker）
+
+```bash
+# 从项目根执行：mysql + redis + backend + web 四个服务
+docker compose -f back-end-spring-cloud/deploy/docker-compose.yml up -d --build
+# 前端 http://localhost:5173 ，后端 http://localhost:8080
+```
+
+完整部署步骤、生产环境变量、健康检查与备份说明见 [部署指南](docs/部署指南.md)。
+GitHub Actions 会在每次 push / PR 自动执行 `mvn test` 与 `npm ci && npm run build`（`.github/workflows/ci.yml`）；
+本地等价命令为 `mvn -B -f back-end-spring-cloud/pom.xml test` 与 `cd front-end && npm ci && npm run build`。
 
 ### 端口说明（重要）
 
@@ -107,6 +132,7 @@ JWT 密钥走 `COT_AUTH_SECRET`（**生产必须覆盖开发默认值**），上
    优先级最高，可强制锁定端口；也可在启动前 `unset SERVER__PORT`（Windows：`set SERVER__PORT=`）。
 
 若改用非 8080 端口，前端 `vite.config.js` 里 `/api` 与 `/files` 两处 `target` 必须一起改。
+容器部署时内部端口固定 8080（nginx 反代指向 `backend:8080`），只改宿主机映射请改 compose 的 `ports` 左侧。
 
 ## 两种身份与权限
 
@@ -169,6 +195,7 @@ JWT 密钥走 `COT_AUTH_SECRET`（**生产必须覆盖开发默认值**），上
 | [数据模型](docs/数据模型.md) | 43 张表与字段字典 |
 | [接口说明](docs/接口说明.md) | REST 约定、权限矩阵、端点清单 |
 | [开发指南](docs/开发指南.md) | 环境、构建、验证、演示账号 |
+| [部署指南](docs/部署指南.md) | Docker 一键启动、生产环境变量、CI、健康检查、备份与 FAQ |
 | [路线图](docs/路线图.md) | P0 - P3 演进 |
 | [后端模块总览](back-end-spring-cloud/docs/后端模块总览.md) | 11 个模块职责 |
 
