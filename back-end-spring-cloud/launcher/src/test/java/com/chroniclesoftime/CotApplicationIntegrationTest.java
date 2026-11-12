@@ -206,4 +206,203 @@ class CotApplicationIntegrationTest {
         mvc.perform(get("/api/v1/timeline/feed").header("Authorization", "Bearer " + token))
                 .andExpect(status().isUnauthorized());
     }
+
+    // ---------- 批次 1：拾光时间线核心闭环 ----------
+
+    @Test @Order(9)
+    void v6MigrationAddsWorkflowColumnsAndBackfills() {
+        Integer applied = jdbc.queryForObject(
+                "select count(*) from flyway_schema_history where success = true", Integer.class);
+        assertTrue(applied != null && applied >= 6, "V1~V6 迁移应全部成功，实际 " + applied);
+
+        Integer origin = jdbc.queryForObject(
+                "select count(*) from information_schema.columns where upper(table_name) = 'MILESTONE' "
+                        + "and upper(column_name) = 'ORIGIN'", Integer.class);
+        assertEquals(1, origin, "V6 应给 milestone 增加 origin 列");
+
+        Integer sessionCol = jdbc.queryForObject(
+                "select count(*) from information_schema.columns where upper(table_name) = 'ANSWER_RECORDS' "
+                        + "and upper(column_name) = 'SESSION_ID'", Integer.class);
+        assertEquals(1, sessionCol, "V6 应给 answer_records 增加 session_id 列");
+
+        Integer backfilled = jdbc.queryForObject(
+                "select count(*) from milestone where origin = 'AUTO'", Integer.class);
+        assertTrue(backfilled != null && backfilled >= 1, "V6 应回填历史 is_milestone 记录");
+    }
+
+    @Test @Order(10)
+    void recordFlagCreatesAndRecyclesAutoMilestone() throws Exception {
+        String user = login(USER, USER_PW);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("recordDate", "2026-11-12");
+        body.put("title", "批次1自动里程碑测试");
+        body.put("content", "联动验证");
+        body.put("isMilestone", true);
+
+        MvcResult r = mvc.perform(post("/api/v1/timeline/r/records")
+                        .header("Authorization", "Bearer " + user)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(body)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andReturn();
+        long rid = json.readTree(r.getResponse().getContentAsString()).path("data").path("id").asLong();
+        assertTrue(rid > 0);
+
+        String countSql = "select count(*) from milestone where linked_record_id = ? and origin = 'AUTO'";
+        assertEquals(1, jdbc.queryForObject(countSql, Integer.class, rid), "勾选后应自动生成一条 AUTO 里程碑");
+
+        // 重复保存不得产生第二条
+        Map<String, Object> again = new LinkedHashMap<>(body);
+        again.put("id", rid);
+        mvc.perform(put("/api/v1/timeline/r/records/" + rid)
+                        .header("Authorization", "Bearer " + user)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(again)))
+                .andExpect(status().isOk());
+        assertEquals(1, jdbc.queryForObject(countSql, Integer.class, rid), "联动必须幂等");
+
+        // 取消勾选后回收
+        again.put("isMilestone", false);
+        mvc.perform(put("/api/v1/timeline/r/records/" + rid)
+                        .header("Authorization", "Bearer " + user)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(again)))
+                .andExpect(status().isOk());
+        assertEquals(0, jdbc.queryForObject(countSql, Integer.class, rid), "取消勾选应回收 AUTO 里程碑");
+
+        mvc.perform(delete("/api/v1/timeline/r/records/" + rid)
+                .header("Authorization", "Bearer " + user))
+                .andExpect(status().isOk());
+    }
+
+    @Test @Order(11)
+    void manualMilestoneCanLinkAndUnlinkRecord() throws Exception {
+        String user = login(USER, USER_PW);
+        long recordId = createRecord(user, "手动关联用记录", false, "LINK_PROBE_CAT");
+        long milestoneId = createMilestone(user, "手动创建的里程碑");
+        try {
+            mvc.perform(post("/api/v1/timeline/milestones/" + milestoneId + "/link")
+                            .header("Authorization", "Bearer " + user)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(json.writeValueAsString(Map.of("recordId", recordId))))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.code").value(200));
+            Long linked = jdbc.queryForObject("select linked_record_id from milestone where id = ?", Long.class, milestoneId);
+            assertEquals(recordId, linked == null ? -1 : linked, "手动关联应写入 linked_record_id");
+            assertEquals("MANUAL", jdbc.queryForObject("select origin from milestone where id = ?", String.class, milestoneId));
+
+            mvc.perform(delete("/api/v1/timeline/milestones/" + milestoneId + "/link")
+                            .header("Authorization", "Bearer " + user))
+                    .andExpect(status().isOk());
+            assertNull(jdbc.queryForObject("select linked_record_id from milestone where id = ?", Long.class, milestoneId),
+                    "解除关联必须真正把 linked_record_id 清空");
+        } finally {
+            mvc.perform(delete("/api/v1/timeline/r/milestones/" + milestoneId)
+                    .header("Authorization", "Bearer " + user)).andExpect(status().isOk());
+            mvc.perform(delete("/api/v1/timeline/r/records/" + recordId)
+                    .header("Authorization", "Bearer " + user)).andExpect(status().isOk());
+        }
+    }
+
+    @Test @Order(12)
+    void feedFiltersAndPaginationWork() throws Exception {
+        String user = login(USER, USER_PW);
+        JsonNode page = getJson("/api/v1/timeline/feed/page?page=1&size=3", user, 200).path("data");
+        assertTrue(page.path("items").isArray());
+        assertTrue(page.path("items").size() <= 3, "分页应限制每页条数");
+        assertTrue(page.path("total").asInt() >= page.path("items").size());
+        assertTrue(page.path("pages").asInt() >= 1);
+
+        JsonNode empty = getJson("/api/v1/timeline/feed/page?q=zzz_no_such_keyword_zzz", user, 200).path("data");
+        assertEquals(0, empty.path("total").asInt(), "关键词筛不出结果时总数应为 0");
+
+        JsonNode future = getJson("/api/v1/timeline/feed?dateFrom=2099-01-01", user, 200).path("data");
+        assertTrue(future.isArray() && future.isEmpty(), "起始日期筛选应生效");
+
+        JsonNode limited = getJson("/api/v1/timeline/feed?limit=2", user, 200).path("data");
+        assertTrue(limited.isArray() && limited.size() <= 2, "limit 应生效");
+    }
+
+    @Test @Order(13)
+    void workflowSyncsWorkRecordIntoResume() throws Exception {
+        String user = login(USER, USER_PW);
+        Map<String, Object> work = new LinkedHashMap<>();
+        work.put("company", "批次1同步测试单位");
+        work.put("position", "测试岗");
+        work.put("startDate", "2026-11-01");
+        work.put("category", "实习");
+        MvcResult r = mvc.perform(post("/api/v1/timeline/r/work-records")
+                        .header("Authorization", "Bearer " + user)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(work)))
+                .andExpect(status().isOk()).andReturn();
+        long wid = json.readTree(r.getResponse().getContentAsString()).path("data").path("id").asLong();
+
+        mvc.perform(post("/api/v1/timeline/workflow/sync-resume")
+                        .header("Authorization", "Bearer " + user)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of("kind", "work", "ids", java.util.List.of(wid)))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.created").value(1));
+
+        JsonNode status = getJson("/api/v1/timeline/workflow/resume-status", user, 200).path("data");
+        assertTrue(status.path("work").asInt() >= 1, "简历分组应可见回写结果");
+
+        // 再次同步应跳过同名分组，不重复写入
+        mvc.perform(post("/api/v1/timeline/workflow/sync-resume")
+                        .header("Authorization", "Bearer " + user)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of("kind", "work", "ids", java.util.List.of(wid)))))
+                .andExpect(jsonPath("$.data.skipped").value(1));
+
+        mvc.perform(delete("/api/v1/timeline/r/work-records/" + wid)
+                .header("Authorization", "Bearer " + user)).andExpect(status().isOk());
+    }
+
+    @Test @Order(14)
+    void featureEndpointsAreAccountScoped() throws Exception {
+        String admin = login(ADMIN, ADMIN_PW);
+        String onlyAdminCategory = "SCOPE_PROBE_CAT";
+        long adminRecord = createRecord(admin, "ADMIN_SCOPED_RECORD", false, onlyAdminCategory);
+        try {
+            String user = login(USER, USER_PW);
+            JsonNode facets = getJson("/api/v1/timeline/records/facets", user, 200).path("data");
+            assertFalse(facets.path("categories").toString().contains(onlyAdminCategory),
+                    "普通用户的筛选字典不得包含其他账号的数据");
+
+            JsonNode feed = getJson("/api/v1/timeline/feed?q=ADMIN_SCOPED_RECORD", user, 200).path("data");
+            assertEquals(0, feed.size(), "时间线不得泄露其他账号的记录");
+        } finally {
+            mvc.perform(delete("/api/v1/timeline/r/records/" + adminRecord)
+                    .header("Authorization", "Bearer " + admin)).andExpect(status().isOk());
+        }
+    }
+
+    private long createRecord(String token, String title, boolean milestone, String category) throws Exception {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("recordDate", "2026-11-12");
+        body.put("title", title);
+        body.put("category", category);
+        body.put("isMilestone", milestone);
+        MvcResult r = mvc.perform(post("/api/v1/timeline/r/records")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(body)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andReturn();
+        return json.readTree(r.getResponse().getContentAsString()).path("data").path("id").asLong();
+    }
+
+    private long createMilestone(String token, String title) throws Exception {
+        MvcResult r = mvc.perform(post("/api/v1/timeline/r/milestones")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of("title", title, "occurredAt", "2026-11-12"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andReturn();
+        return json.readTree(r.getResponse().getContentAsString()).path("data").path("id").asLong();
+    }
 }

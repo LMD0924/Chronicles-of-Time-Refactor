@@ -26,6 +26,9 @@ public class Milestone {
     private String color;
     @TableField("linked_record_id")
     private Long linkedRecordId;
+    /** AUTO = 由成长记录自动生成；MANUAL = 手动创建或手动关联。 */
+    @TableField("origin")
+    private String origin;
     @TableField("created_at")
     private String createdAt;
 
@@ -46,6 +49,8 @@ public class Milestone {
     public void setColor(String v) { this.color = v; }
     public Long getLinkedRecordId() { return linkedRecordId; }
     public void setLinkedRecordId(Long v) { this.linkedRecordId = v; }
+    public String getOrigin() { return origin; }
+    public void setOrigin(String v) { this.origin = v; }
     public String getCreatedAt() { return createdAt; }
     public void setCreatedAt(String v) { this.createdAt = v; }
 }

@@ -13,13 +13,18 @@ const props = defineProps({
   option: { type: Object, required: true },
   height: { type: Number, default: 300 }
 })
+/** 可选：把 ECharts 的点击事件透传给业务页面（不监听时行为与原来完全一致）。 */
+const emit = defineEmits(['point-click'])
 const el = ref(null)
 const { theme } = useTheme()
 let chart = null
 
 function render() {
   if (!el.value) return
-  if (!chart) chart = echarts.init(el.value)
+  if (!chart) {
+    chart = echarts.init(el.value)
+    chart.on('click', (p) => emit('point-click', p))
+  }
   const dark = theme.value === 'dark'
   const opt = JSON.parse(JSON.stringify(props.option))
   opt.backgroundColor = 'transparent'

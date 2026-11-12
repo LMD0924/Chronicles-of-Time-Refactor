@@ -17,6 +17,8 @@ import java.util.*;
 /**
  * 跨域时间线聚合：把记录、里程碑、学习、规划、社区、档案的数据挂到同一条时间轴上，
  * 这是「不再按人生阶段切分、功能之间建立关联」的落地实现。
+ *
+ * 筛选：type / q / category / period / dateFrom / dateTo；/feed/page 提供分页与总数。
  */
 @RestController
 @RequestMapping("/api/v1/timeline")
@@ -40,7 +42,47 @@ public class TimelineFeedController {
      */
     @GetMapping("/feed")
     public Result<?> feed(@RequestParam(required = false) String type,
-                          @RequestParam(defaultValue = "false") boolean all) {
+                          @RequestParam(defaultValue = "false") boolean all,
+                          @RequestParam(required = false) String q,
+                          @RequestParam(required = false) String category,
+                          @RequestParam(required = false) String period,
+                          @RequestParam(required = false) String dateFrom,
+                          @RequestParam(required = false) String dateTo,
+                          @RequestParam(defaultValue = "0") int limit) {
+        List<Map<String, Object>> entries = build(type, all, q, category, period, dateFrom, dateTo);
+        if (limit > 0 && entries.size() > limit) return Result.ok(new ArrayList<>(entries.subList(0, limit)));
+        return Result.ok(entries);
+    }
+
+    /** 分页版时间线：返回 {items, total, page, size, pages}，供「加载更多」使用。 */
+    @GetMapping("/feed/page")
+    public Result<?> feedPage(@RequestParam(defaultValue = "1") int page,
+                              @RequestParam(defaultValue = "20") int size,
+                              @RequestParam(required = false) String type,
+                              @RequestParam(defaultValue = "false") boolean all,
+                              @RequestParam(required = false) String q,
+                              @RequestParam(required = false) String category,
+                              @RequestParam(required = false) String period,
+                              @RequestParam(required = false) String dateFrom,
+                              @RequestParam(required = false) String dateTo) {
+        List<Map<String, Object>> entries = build(type, all, q, category, period, dateFrom, dateTo);
+        int safeSize = Math.max(1, Math.min(size, 200));
+        int pages = Math.max(1, (entries.size() + safeSize - 1) / safeSize);
+        int safePage = Math.max(1, Math.min(page, pages));
+        int from = (safePage - 1) * safeSize;
+        int to = Math.min(from + safeSize, entries.size());
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("items", from >= to ? List.of() : new ArrayList<>(entries.subList(from, to)));
+        out.put("total", entries.size());
+        out.put("page", safePage);
+        out.put("size", safeSize);
+        out.put("pages", pages);
+        return Result.ok(out);
+    }
+
+    private List<Map<String, Object>> build(String type, boolean all, String q,
+                                            String category, String period,
+                                            String dateFrom, String dateTo) {
         Long uid = AuthContext.userId();
         boolean crossAccount = all && AuthContext.isAdmin();
         List<Map<String, Object>> entries = new ArrayList<>();
@@ -50,15 +92,35 @@ public class TimelineFeedController {
         add(entries, "进阶", scoped(timeline.rows("advance-records"), uid, crossAccount), "occurredAt", "title", "description", "violet", "/timeline/advances");
         add(entries, "成绩", scoped(learning.rows("scores"), uid, crossAccount), "examDate", "examName", "score", "sky", "/learning/scores");
         add(entries, "练习", scoped(learning.rows("sessions"), uid, crossAccount), "startedAt", "title", "correctCount", "mint", "/learning/practice");
-        add(entries, "规划", scoped(planning.rows("review-plans"), uid, crossAccount), "targetDate", "title", "content", "blue", "/planning/review");
+        add(entries, "规划", scoped(planning.rows("review-plans"), uid, crossAccount), "targetDate", "title", "content", "sky", "/planning/review");
         add(entries, "目标", scoped(planning.rows("target-paths"), uid, crossAccount), "deadline", "targetName", "milestone", "rose", "/planning/target");
         add(entries, "文章", community.rows("contents"), "createdAt", "title", "summary", "violet", "/community");
         add(entries, "证书", scoped(archive.rows("certificates"), uid, crossAccount), "issuedAt", "name", "issuer", "amber", "/archive/certificates");
         add(entries, "论文", scoped(archive.rows("papers"), uid, crossAccount), "createdAt", "title", "abstractText", "teal", "/archive/papers");
-        entries.removeIf(e -> e.get("occurredAt") == null || String.valueOf(e.get("occurredAt")).isBlank());
-        if (type != null && !type.isBlank()) entries.removeIf(e -> !type.equals(e.get("type")));
+
+        String kw = q == null ? "" : q.trim().toLowerCase();
+        entries.removeIf(e -> {
+            if (e.get("occurredAt") == null || String.valueOf(e.get("occurredAt")).isBlank()) return true;
+            if (type != null && !type.isBlank() && !type.equals(e.get("type"))) return true;
+            if (!kw.isEmpty() && !contains(e.get("title"), kw) && !contains(e.get("summary"), kw)) return true;
+            String d = dateOf(e.get("occurredAt"));
+            if (dateFrom != null && !dateFrom.isBlank() && d.compareTo(dateFrom.trim()) < 0) return true;
+            if (dateTo != null && !dateTo.isBlank() && d.compareTo(dateTo.trim()) > 0) return true;
+            if (category != null && !category.isBlank() && !category.equals(text(e.get("category")))) return true;
+            if (period != null && !period.isBlank() && !period.equals(text(e.get("period")))) return true;
+            return false;
+        });
         entries.sort((a, b) -> String.valueOf(b.get("occurredAt")).compareTo(String.valueOf(a.get("occurredAt"))));
-        return Result.ok(entries);
+        return entries;
+    }
+
+    private static boolean contains(Object value, String kw) {
+        return value != null && String.valueOf(value).toLowerCase().contains(kw);
+    }
+    private static String text(Object value) { return value == null ? "" : String.valueOf(value); }
+    private static String dateOf(Object value) {
+        String s = String.valueOf(value);
+        return s.length() > 10 ? s.substring(0, 10) : s;
     }
 
     private List<Map<String, Object>> scoped(List<Map<String, Object>> rows, Long uid, boolean crossAccount) {
@@ -81,6 +143,9 @@ public class TimelineFeedController {
             e.put("link", link);
             e.put("color", color);
             e.put("sourceId", r.get("id"));
+            e.put("category", r.get("category"));
+            e.put("period", r.get("period"));
+            e.put("tags", r.get("tags"));
             out.add(e);
         }
     }
