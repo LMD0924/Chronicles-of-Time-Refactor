@@ -70,6 +70,7 @@ export const R = {
 
 /** 领域特性接口。 */
 export const feature = {
+  globalSearch: (q, limit = 8) => http.get('/api/v1/search', { params: { q, limit } }),
   dashboard: () => http.get('/api/v1/dashboard'),
   systemModules: () => http.get('/api/v1/system/modules'),
   systemOverview: () => http.get('/api/v1/system/overview'),

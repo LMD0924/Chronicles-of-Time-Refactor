@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import PageHeader from './PageHeader.vue'
-import EmptyState from './EmptyState.vue'
+import StateBlock from './StateBlock.vue'
 
 const props = defineProps({
   api: { type: Object, required: true },
@@ -78,6 +78,25 @@ async function batchRemove() {
   try { await props.api.batchRemove(selected.value); await load() } catch (e) { error.value = e.message }
 }
 
+/** 当前筛选结果导出 CSV（带 UTF-8 BOM，Excel 直接打开不乱码）。 */
+function exportCsv() {
+  if (!filtered.value.length) return
+  const keys = cols.value.map(c => c.key)
+  const esc = v => {
+    const s = v == null ? '' : String(v)
+    return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s
+  }
+  const lines = [cols.value.map(c => esc(c.label)).join(',')]
+  filtered.value.forEach(r => lines.push(keys.map(k => esc(r[k])).join(',')))
+  const blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${props.title || 'export'}-${new Date().toISOString().slice(0, 10)}.csv`
+  document.body.appendChild(a); a.click(); a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
 function display(row, col) {
   const v = row[col.key]
   if (v == null || v === '') return '—'
@@ -103,6 +122,9 @@ onMounted(load)
     <div class="crud-toolbar">
       <input v-model="keyword" class="field max-w-[280px]" type="search" placeholder="搜索关键词…" @keyup.enter="load" />
       <button class="btn btn-blue" type="button" @click="load"><span class="btn-glyph">⌕</span> 检索</button>
+      <button class="btn btn-slate" type="button" :disabled="!filtered.length" @click="exportCsv">
+        <span class="btn-glyph">⇩</span> 导出 CSV
+      </button>
       <button v-if="selected.length && !readonly" class="btn btn-rose" type="button" @click="batchRemove">
         <span class="btn-glyph">×</span> 删除选中 ({{ selected.length }})
       </button>
@@ -110,53 +132,50 @@ onMounted(load)
       <span v-if="error" class="pill pill-rose">{{ error }}</span>
     </div>
 
-    <div v-if="loading" class="grid gap-3">
-      <div v-for="i in 3" :key="i" class="placeholder-bar" style="height: 62px"></div>
-    </div>
-
-    <EmptyState v-else-if="!filtered.length" text="暂无数据" hint="点击右上角「新增」开始记录" />
-
-    <!-- 卡片视图 -->
-    <div v-else-if="cardView" class="crud-grid">
-      <div v-for="row in filtered" :key="row.id" class="crud-card lift" v-reveal="1">
-        <div class="flex items-start justify-between gap-2">
-          <h3 class="text-[14px] font-semibold ink">{{ row.title || row.name || '未命名' }}</h3>
-          <input v-if="!readonly" v-model="selected" type="checkbox" :value="row.id" class="mt-1" />
-        </div>
-        <p class="mt-2 text-[12px] leading-6 muted">{{ display(row, { key: 'content' }) !== '—' ? display(row, { key: 'content' }) : display(row, { key: 'description' }) }}</p>
-        <div class="mt-3 flex flex-wrap gap-1.5">
-          <span v-for="c in cols.slice(0, 3)" :key="c.key" class="pill pill-neutral">{{ c.label }}: {{ display(row, c) }}</span>
-        </div>
-        <div v-if="!readonly" class="mt-4 flex gap-2">
-          <button class="btn btn-violet" type="button" @click="openEdit(row)"><span class="btn-glyph">✎</span> 编辑</button>
-          <button class="btn btn-rose" type="button" @click="remove(row)"><span class="btn-glyph">×</span> 删除</button>
+    <StateBlock :loading="loading" :error="rows.length ? '' : error" :empty="!filtered.length"
+                text="暂无数据" hint="点击右上角「新增」开始记录" @retry="load">
+      <!-- 卡片视图 -->
+      <div v-if="cardView" class="crud-grid">
+        <div v-for="row in filtered" :key="row.id" class="crud-card lift" v-reveal="1">
+          <div class="flex items-start justify-between gap-2">
+            <h3 class="text-[14px] font-semibold ink">{{ row.title || row.name || '未命名' }}</h3>
+            <input v-if="!readonly" v-model="selected" type="checkbox" :value="row.id" class="mt-1" />
+          </div>
+          <p class="mt-2 text-[12px] leading-6 muted">{{ display(row, { key: 'content' }) !== '—' ? display(row, { key: 'content' }) : display(row, { key: 'description' }) }}</p>
+          <div class="mt-3 flex flex-wrap gap-1.5">
+            <span v-for="c in cols.slice(0, 3)" :key="c.key" class="pill pill-neutral">{{ c.label }}: {{ display(row, c) }}</span>
+          </div>
+          <div v-if="!readonly" class="mt-4 flex gap-2">
+            <button class="btn btn-violet" type="button" @click="openEdit(row)"><span class="btn-glyph">✎</span> 编辑</button>
+            <button class="btn btn-rose" type="button" @click="remove(row)"><span class="btn-glyph">×</span> 删除</button>
+          </div>
         </div>
       </div>
-    </div>
 
-    <!-- 表格视图 -->
-    <div v-else class="glass overflow-x-auto p-1">
-      <table class="data-table w-full">
-        <thead>
-          <tr>
-            <th v-if="!readonly" style="width:38px"><input type="checkbox" :checked="selected.length === filtered.length && filtered.length > 0"
-              @change="selected = $event.target.checked ? filtered.map(r => r.id) : []" /></th>
-            <th v-for="c in cols" :key="c.key">{{ c.label }}</th>
-            <th v-if="!readonly" style="width:130px">操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="row in filtered" :key="row.id">
-            <td v-if="!readonly"><input v-model="selected" type="checkbox" :value="row.id" /></td>
-            <td v-for="c in cols" :key="c.key">{{ display(row, c) }}</td>
-            <td v-if="!readonly">
-              <button class="btn btn-violet" type="button" @click="openEdit(row)">编辑</button>
-              <button class="btn btn-rose ml-1" type="button" @click="remove(row)">删除</button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+      <!-- 表格视图 -->
+      <div v-else class="glass overflow-x-auto p-1">
+        <table class="data-table w-full">
+          <thead>
+            <tr>
+              <th v-if="!readonly" style="width:38px"><input type="checkbox" :checked="selected.length === filtered.length && filtered.length > 0"
+                @change="selected = $event.target.checked ? filtered.map(r => r.id) : []" /></th>
+              <th v-for="c in cols" :key="c.key">{{ c.label }}</th>
+              <th v-if="!readonly" style="width:130px">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in filtered" :key="row.id">
+              <td v-if="!readonly"><input v-model="selected" type="checkbox" :value="row.id" /></td>
+              <td v-for="c in cols" :key="c.key">{{ display(row, c) }}</td>
+              <td v-if="!readonly">
+                <button class="btn btn-violet" type="button" @click="openEdit(row)">编辑</button>
+                <button class="btn btn-rose ml-1" type="button" @click="remove(row)">删除</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </StateBlock>
 
     <!-- 新增 / 编辑弹窗 -->
     <Teleport to="body">

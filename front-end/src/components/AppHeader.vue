@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useTheme } from '@/composables/useTheme'
 import { useAuthStore } from '@/stores/auth'
@@ -10,10 +10,12 @@ const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const scrolled = ref(false)
+const menuOpen = ref(false)
 const initial = computed(() => (auth.displayName || '拾').slice(0, 1).toUpperCase())
 
 async function doLogout() {
   await auth.logout()
+  menuOpen.value = false
   router.push('/')
 }
 
@@ -22,6 +24,7 @@ function isGroupActive(group) {
 }
 
 function onScroll() { scrolled.value = window.scrollY > 28 }
+watch(() => route.path, () => { menuOpen.value = false })
 onMounted(() => { onScroll(); window.addEventListener('scroll', onScroll, { passive: true }) })
 onUnmounted(() => window.removeEventListener('scroll', onScroll))
 </script>
@@ -59,6 +62,11 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
       </nav>
 
       <div class="nav-actions">
+        <RouterLink v-if="auth.isLoggedIn" to="/search" class="btn-icon" title="全局搜索" aria-label="全局搜索">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+            <circle cx="11" cy="11" r="7" /><path d="M16.5 16.5 21 21" />
+          </svg>
+        </RouterLink>
         <button class="btn-icon" type="button"
                 :aria-label="theme === 'dark' ? '切换到浅色主题' : '切换到深色主题'"
                 :title="theme === 'dark' ? '浅色主题' : '深色主题'" @click="toggleTheme">
@@ -83,6 +91,31 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
           <span class="pill pill-neutral">游客</span>
           <RouterLink to="/login" class="btn btn-blue"><span class="btn-glyph">→</span> 登录</RouterLink>
         </template>
+
+        <button class="mobile-menu-btn" type="button" :aria-expanded="menuOpen" aria-label="展开导航菜单"
+                @click="menuOpen = !menuOpen">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <path v-if="!menuOpen" d="M4 7h16M4 12h16M4 17h16" />
+            <path v-else d="M6 6l12 12M18 6 6 18" />
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- 窄屏导航：桌面端 Mega Menu 在触屏上不好悬停，改为可折叠的全量入口列表 -->
+    <div v-if="menuOpen" class="mobile-nav" @click="menuOpen = false">
+      <div v-for="group in NAV_GROUPS" :key="group.key" class="mb-4">
+        <p class="eyebrow mb-2">{{ group.label }}</p>
+        <div class="flex flex-wrap gap-1.5">
+          <RouterLink v-for="item in group.items" :key="item.to" :to="item.to" class="pill pill-neutral">{{ item.label }}</RouterLink>
+        </div>
+      </div>
+      <div class="flex flex-wrap gap-2 border-t border-hairline pt-3">
+        <RouterLink v-if="auth.isLoggedIn" to="/search" class="btn btn-blue">全局搜索</RouterLink>
+        <RouterLink v-if="auth.isAdmin" to="/admin" class="btn btn-violet">管理后台</RouterLink>
+        <RouterLink v-if="auth.isLoggedIn" to="/profile" class="btn btn-slate">个人中心</RouterLink>
+        <RouterLink v-if="!auth.isLoggedIn" to="/login" class="btn btn-blue">登录</RouterLink>
+        <button v-else type="button" class="btn btn-slate" @click="doLogout">退出</button>
       </div>
     </div>
   </header>

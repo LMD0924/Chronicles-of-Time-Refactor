@@ -23,6 +23,9 @@ http.interceptors.response.use(
       if (body.code === 200) return body.data
       const err = new Error(body.message || '请求失败')
       err.code = body.code
+      if (!res.config?.url?.includes('/auth/login') && !res.config?.url?.includes('/auth/register')) {
+        window.dispatchEvent(new CustomEvent('cot:toast', { detail: { message: err.message } }))
+      }
       return Promise.reject(err)
     }
     return body
@@ -37,6 +40,10 @@ http.interceptors.response.use(
     const body = error.response?.data
     const err = new Error(body?.message || error.message || '网络异常')
     err.code = body?.code || status
+    // 统一错误态：登录页的密码错误由页面自行展示，不重复弹全局提示。
+    if (!url.includes('/auth/login') && !url.includes('/auth/register')) {
+      window.dispatchEvent(new CustomEvent('cot:toast', { detail: { message: err.message } }))
+    }
     return Promise.reject(err)
   }
 )

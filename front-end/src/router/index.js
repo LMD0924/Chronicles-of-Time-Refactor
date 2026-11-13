@@ -8,6 +8,7 @@ const router = createRouter({
     { path: '/', name: 'WelcomeView', component: () => import('@/views/WelcomeView.vue') },
     { path: '/login', name: 'LoginView', component: () => import('@/views/LoginView.vue') },
     { path: '/share/:token', name: 'SharedView', component: () => import('@/views/SharedView.vue'), meta: { public: true } },
+    { path: '/search', name: 'GlobalSearchView', component: () => import('@/views/GlobalSearchView.vue'), meta: { requiresAuth: true } },
     { path: '/timeline', name: 'TimelineView', component: () => import('@/views/TimelineView.vue'), meta: { requiresAuth: true } },
     { path: '/timeline/records', name: 'RecordsView', component: () => import('@/views/RecordsView.vue'), meta: { requiresAuth: true } },
     { path: '/timeline/milestones', name: 'MilestonesView', component: () => import('@/views/MilestonesView.vue'), meta: { requiresAuth: true } },

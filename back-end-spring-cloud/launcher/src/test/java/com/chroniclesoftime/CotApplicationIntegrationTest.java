@@ -1013,4 +1013,57 @@ class CotApplicationIntegrationTest {
                 .andExpect(jsonPath("$.code").value(200)).andReturn();
         return json.readTree(r.getResponse().getContentAsString()).path("data").path("id").asLong();
     }
+
+    // ============================================================ 批次6：全端点冒烟与横切验收
+
+    @Test @Order(32)
+    void allKeyEndpointsRespondOkAfterAllBatches() throws Exception {
+        String user = login(USER, USER_PW);
+        String admin = login(ADMIN, ADMIN_PW);
+        String[] userPaths = {
+                "/api/v1/search?q=" + java.net.URLEncoder.encode("时间线", java.nio.charset.StandardCharsets.UTF_8),
+                "/api/v1/dashboard", "/api/v1/timeline/feed", "/api/v1/timeline/feed/page",
+                "/api/v1/timeline/stats", "/api/v1/timeline/records/facets", "/api/v1/timeline/records/heatmap",
+                "/api/v1/timeline/milestones/detail", "/api/v1/timeline/workflow/resume-status",
+                "/api/v1/learning/stats", "/api/v1/learning/questions/facets", "/api/v1/learning/practice/sessions",
+                "/api/v1/planning/workflow/overview", "/api/v1/planning/workflow/review/board",
+                "/api/v1/archive/stats", "/api/v1/archive/workflow/overview", "/api/v1/archive/workflow/thesis/board",
+                "/api/v1/archive/workflow/elective/summary", "/api/v1/community/contents/hot",
+                "/api/v1/community/tag-cloud", "/api/v1/community/category-stats",
+                "/api/v1/community/workflow/overview", "/api/v1/community/workflow/my-contents"
+        };
+        for (String path : userPaths) {
+            assertEquals(200, getJson(path, user, 200).path("code").asInt(), "端点应可用: " + path);
+        }
+        for (String path : new String[]{"/api/v1/admin/stats", "/api/v1/admin/contents/pending", "/api/v1/admin/audit"}) {
+            assertEquals(200, getJson(path, admin, 200).path("code").asInt(), "管理端点应可用: " + path);
+        }
+        JsonNode search = getJson(userPaths[0], user, 200).path("data");
+        assertTrue(search.path("groups").isArray(), "全局搜索应返回分组结果");
+    }
+
+    @Test @Order(33)
+    void workflowWritesAreAuditedAndDemoDataIsAligned() throws Exception {
+        String user = login(USER, USER_PW);
+        int before = jdbc.queryForObject("select count(*) from audit_log where action like 'WORKFLOW_%'", Integer.class);
+        long id = createArticle(user, "BATCH5_AUDIT_PROBE", "DRAFT", "审计", "随笔");
+        try {
+            int after = jdbc.queryForObject("select count(*) from audit_log where action like 'WORKFLOW_%'", Integer.class);
+            assertTrue(after > before, "工作流写操作应自动写入审计日志");
+
+            assertEquals(1, jdbc.queryForObject(
+                    "select count(*) from share_link where token = 'demo-share-token-2026'", Integer.class));
+            assertEquals(200, anonymousGet("/api/v1/timeline/share/demo-share-token-2026").path("code").asInt(),
+                    "V9 的演示分享链接应可直接打开");
+            assertTrue(jdbc.queryForObject(
+                    "select count(*) from content where status = 'REJECTED' and review_note like '%标题不够具体%'",
+                    Integer.class) >= 1, "V9 应包含带驳回理由的稿件");
+            assertEquals(0, jdbc.queryForObject(
+                    "select count(*) from thesis_board_item where status in ('DONE','TODO','IN_PROGRESS') "
+                            + "or stage in ('调研','开发')", Integer.class), "V9 应把英文枚举对齐成中文");
+            assertTrue(jdbc.queryForObject(
+                    "select count(*) from answer_records where session_id is not null", Integer.class) > 0,
+                    "V9 应回填历史答题记录的场次");
+        } finally { cleanupArticle(id); }
+    }
 }
