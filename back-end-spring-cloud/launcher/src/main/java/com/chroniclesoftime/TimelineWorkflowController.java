@@ -61,7 +61,7 @@ public class TimelineWorkflowController {
         }
 
         Set<String> existing = new HashSet<>();
-        for (Map<String, Object> s : identity.rows("resume-sections")) {
+        for (Map<String, Object> s : identity.rowsScoped("resume-sections")) {
             if (uid != null && !uid.equals(longOf(s.get("userId")))) continue;
             existing.add(kind + "|" + String.valueOf(s.getOrDefault("title", "")));
         }
@@ -100,7 +100,7 @@ public class TimelineWorkflowController {
 
     private int countSynced(String kind, Long uid) {
         int n = 0;
-        for (Map<String, Object> s : identity.rows("resume-sections")) {
+        for (Map<String, Object> s : identity.rowsScoped("resume-sections")) {
             if (uid != null && !uid.equals(longOf(s.get("userId")))) continue;
             if (kind.equals(String.valueOf(s.get("sectionType")))) n++;
         }

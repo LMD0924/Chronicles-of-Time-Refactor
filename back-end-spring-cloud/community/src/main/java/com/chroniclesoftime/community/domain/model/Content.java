@@ -40,6 +40,12 @@ public class Content {
     private String createdAt;
     @TableField("updated_at")
     private String updatedAt;
+    @TableField("review_note")
+    private String reviewNote;
+    @TableField("reviewed_by")
+    private Long reviewedBy;
+    @TableField("reviewed_at")
+    private String reviewedAt;
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -72,4 +78,10 @@ public class Content {
     public void setCreatedAt(String v) { this.createdAt = v; }
     public String getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(String v) { this.updatedAt = v; }
+    public String getReviewNote() { return reviewNote; }
+    public void setReviewNote(String v) { this.reviewNote = v; }
+    public Long getReviewedBy() { return reviewedBy; }
+    public void setReviewedBy(Long v) { this.reviewedBy = v; }
+    public String getReviewedAt() { return reviewedAt; }
+    public void setReviewedAt(String v) { this.reviewedAt = v; }
 }

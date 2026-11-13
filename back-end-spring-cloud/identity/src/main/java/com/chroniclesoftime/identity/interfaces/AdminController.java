@@ -226,7 +226,7 @@ public class AdminController {
                               @RequestParam(required = false) String keyword) {
         StringBuilder sql = new StringBuilder(
                 "SELECT id, user_id, author_name, title, category, status, view_count, like_count, "
-                        + "favorite_count, created_at, updated_at FROM content WHERE 1 = 1");
+                        + "favorite_count, review_note, reviewed_by, reviewed_at, created_at, updated_at FROM content WHERE 1 = 1");
         List<Object> args = new ArrayList<>();
         if (status != null && !status.isBlank()) { sql.append(" AND status = ?"); args.add(status); }
         if (keyword != null && !keyword.isBlank()) {
@@ -236,6 +236,37 @@ public class AdminController {
         }
         sql.append(" ORDER BY id DESC");
         return Result.ok(Map.of("items", query(sql.toString(), args.toArray())));
+    }
+
+    /** 待审核队列：按提交时间倒序，附带正文摘要便于管理员判断。 */
+    @GetMapping("/contents/pending")
+    public Result<?> pendingContents() {
+        return Result.ok(Map.of("items", query(
+                "SELECT id, user_id, author_name, title, category, tags, summary, created_at, updated_at "
+                        + "FROM content WHERE status = 'PENDING' ORDER BY updated_at DESC, id DESC")));
+    }
+
+    /** D4 审核：通过 → PUBLISHED；驳回 → REJECTED 且必须写明理由（作者可见）。 */
+    @PutMapping("/contents/{id}/review")
+    public Result<?> reviewContent(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        String action = String.valueOf(body.getOrDefault("action", "")).toUpperCase(Locale.ROOT);
+        String note = String.valueOf(body.getOrDefault("note", "")).trim();
+        if (!"APPROVE".equals(action) && !"REJECT".equals(action)) {
+            return Result.fail(400, "action 只能是 APPROVE / REJECT");
+        }
+        if ("REJECT".equals(action) && note.isBlank()) return Result.fail(400, "驳回必须填写理由");
+        if (note.length() > 1000) return Result.fail(400, "审核意见最多 1000 字");
+        List<Map<String, Object>> cur = query("SELECT status, title FROM content WHERE id = ?", id);
+        if (cur.isEmpty()) return Result.fail(404, "文章不存在");
+        String before = String.valueOf(cur.get(0).get("status"));
+        if (!"PENDING".equals(before)) return Result.fail(400, "只有待审核的稿件可以审核");
+
+        String after = "APPROVE".equals(action) ? "PUBLISHED" : "REJECTED";
+        jdbc.update("UPDATE content SET status = ?, review_note = ?, reviewed_by = ?, reviewed_at = ?, updated_at = ? WHERE id = ?",
+                after, note, AuthContext.userId(), now(), now(), id);
+        audit("REVIEW_CONTENT_" + action, "content", String.valueOf(id), before,
+                after + (note.isBlank() ? "" : " | " + note));
+        return Result.ok(Map.of("id", id, "status", after, "reviewNote", note));
     }
 
     /** 内容发布 / 下架 / 归档，写含前后状态的审计。 */

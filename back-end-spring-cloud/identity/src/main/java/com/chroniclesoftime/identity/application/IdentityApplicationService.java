@@ -94,6 +94,13 @@ public class IdentityApplicationService {
                 .collect(Collectors.toList());
     }
 
+    /** 按当前账号隔离的原始视图：简历等私有数据一律走这里。 */
+    public List<Map<String, Object>> rowsScoped(String resource) {
+        return list(resource, false, null).stream()
+                .map(r -> (Map<String, Object>) json.convertValue(r, Map.class))
+                .collect(Collectors.toList());
+    }
+
     private Repository require(String resource) {
         Repository r = repos.get(resource);
         if (r == null) throw new IllegalArgumentException("未知资源: " + resource);

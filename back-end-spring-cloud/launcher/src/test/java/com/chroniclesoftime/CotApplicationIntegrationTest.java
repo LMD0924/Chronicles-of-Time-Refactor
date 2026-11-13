@@ -11,6 +11,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
@@ -765,5 +766,251 @@ class CotApplicationIntegrationTest {
         q.put("answer", answer); q.put("explanation", "解析 " + title);
         q.put("difficulty", "中等"); q.put("source", "集成测试");
         return q;
+    }
+
+    // ============================================================ 批次4：档案与社区
+
+    @Test @Order(26)
+    void draftsAreHiddenFromPublicEndpoints() throws Exception {
+        String user = login(USER, USER_PW);
+        String admin = login(ADMIN, ADMIN_PW);
+        long id = createArticle(user, "BATCH4_DRAFT_SECRET", "DRAFT", "BATCH4_SECRET_TAG", "BATCH4_SECRET_CAT");
+        try {
+            assertEquals(0, anonymousGet("/api/v1/community/contents/search?keyword=BATCH4_DRAFT_SECRET")
+                    .path("data").size(), "公开检索不得泄露草稿");
+            mvc.perform(get("/api/v1/community/contents/" + id + "/detail"))
+                    .andExpect(jsonPath("$.code").value(404));
+            assertTrue(getJson("/api/v1/community/workflow/my-contents", user, 200)
+                    .path("data").path("items").toString().contains("BATCH4_DRAFT_SECRET"), "作者应能看到自己的草稿");
+            assertTrue(getJson("/api/v1/admin/contents?status=DRAFT", admin, 200)
+                    .path("data").path("items").toString().contains("BATCH4_DRAFT_SECRET"), "管理员应能核查草稿");
+        } finally { cleanupArticle(id); }
+    }
+
+    @Test @Order(27)
+    void contentReviewWorkflowPublishesArticle() throws Exception {
+        String user = login(USER, USER_PW);
+        String admin = login(ADMIN, ADMIN_PW);
+        long id = createArticle(user, "BATCH4_APPROVED_ARTICLE", "PENDING", "复盘,批次四", "复盘");
+        try {
+            assertTrue(getJson("/api/v1/admin/contents/pending", admin, 200)
+                    .path("data").path("items").toString().contains("BATCH4_APPROVED_ARTICLE"));
+            mvc.perform(put("/api/v1/admin/contents/" + id + "/review")
+                            .header("Authorization", "Bearer " + admin)
+                            .contentType(MediaType.APPLICATION_JSON).content("{\"action\":\"APPROVE\"}"))
+                    .andExpect(jsonPath("$.data.status").value("PUBLISHED"));
+            assertEquals("PUBLISHED", jdbc.queryForObject("select status from content where id = ?", String.class, id));
+            JsonNode detail = anonymousGet("/api/v1/community/contents/" + id + "/detail").path("data");
+            assertEquals("BATCH4_APPROVED_ARTICLE", detail.path("title").asText());
+            assertTrue(detail.path("viewCount").asInt() >= 1, "公开详情应累加浏览量");
+            Integer audits = jdbc.queryForObject(
+                    "select count(*) from audit_log where action = 'REVIEW_CONTENT_APPROVE' and target_id = ?",
+                    Integer.class, String.valueOf(id));
+            assertTrue(audits != null && audits >= 1, "审核应写入审计日志");
+        } finally { cleanupArticle(id); }
+    }
+
+    @Test @Order(28)
+    void rejectionShowsReasonAndCanBeResubmitted() throws Exception {
+        String user = login(USER, USER_PW);
+        String admin = login(ADMIN, ADMIN_PW);
+        long id = createArticle(user, "BATCH4_REJECTED_ARTICLE", "PENDING", "草稿", "随笔");
+        try {
+            String review = "/api/v1/admin/contents/" + id + "/review";
+            mvc.perform(put(review).header("Authorization", "Bearer " + admin)
+                            .contentType(MediaType.APPLICATION_JSON).content("{\"action\":\"REJECT\"}"))
+                    .andExpect(jsonPath("$.code").value(400));
+            mvc.perform(put(review).header("Authorization", "Bearer " + admin)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"action\":\"REJECT\",\"note\":\"标题不够具体\"}"))
+                    .andExpect(jsonPath("$.data.status").value("REJECTED"));
+            boolean found = false;
+            for (JsonNode n : getJson("/api/v1/community/workflow/my-contents", user, 200).path("data").path("items")) {
+                if (n.path("id").asLong() == id) {
+                    assertTrue(n.path("reviewNote").asText().contains("标题不够具体"), "作者应看到驳回理由");
+                    found = true;
+                }
+            }
+            assertTrue(found, "我的投稿应包含被驳回稿件");
+            mvc.perform(post("/api/v1/community/workflow/contents/" + id + "/submit")
+                            .header("Authorization", "Bearer " + user))
+                    .andExpect(jsonPath("$.data.status").value("PENDING"));
+            assertEquals("", jdbc.queryForObject("select review_note from content where id = ?", String.class, id));
+            mvc.perform(post("/api/v1/community/workflow/contents/" + id + "/withdraw")
+                            .header("Authorization", "Bearer " + user))
+                    .andExpect(jsonPath("$.data.status").value("DRAFT"));
+        } finally { cleanupArticle(id); }
+    }
+
+    @Test @Order(29)
+    void interactionsRequireLoginAndAreIdempotent() throws Exception {
+        String user = login(USER, USER_PW);
+        String admin = login(ADMIN, ADMIN_PW);
+        long published = createArticle(user, "BATCH4_INTERACTION", "PENDING", "复盘", "复盘");
+        long draft = createArticle(user, "BATCH4_DRAFT_COMMENT", "DRAFT", "草稿", "随笔");
+        approveArticle(admin, published);
+        try {
+            mvc.perform(post("/api/v1/community/contents/" + published + "/like"))
+                    .andExpect(status().isUnauthorized());
+            mvc.perform(post("/api/v1/community/contents/" + published + "/like")
+                            .header("Authorization", "Bearer " + user))
+                    .andExpect(jsonPath("$.data.changed").value(true));
+            mvc.perform(post("/api/v1/community/contents/" + published + "/like")
+                            .header("Authorization", "Bearer " + user))
+                    .andExpect(jsonPath("$.data.changed").value(false));
+            assertEquals(1, jdbc.queryForObject("select like_count from content where id = ?", Integer.class, published));
+
+            mvc.perform(post("/api/v1/community/workflow/contents/" + draft + "/comments")
+                            .header("Authorization", "Bearer " + user)
+                            .contentType(MediaType.APPLICATION_JSON).content("{\"body\":\"不应成功\"}"))
+                    .andExpect(jsonPath("$.code").value(400));
+            MvcResult created = mvc.perform(post("/api/v1/community/workflow/contents/" + published + "/comments")
+                            .header("Authorization", "Bearer " + user)
+                            .contentType(MediaType.APPLICATION_JSON).content("{\"body\":\"批次四评论\"}"))
+                    .andExpect(jsonPath("$.code").value(200)).andReturn();
+            long cid = json.readTree(created.getResponse().getContentAsString()).path("data").path("id").asLong();
+            assertTrue(anonymousGet("/api/v1/community/contents/" + published + "/detail")
+                    .path("data").path("comments").toString().contains("批次四评论"));
+            mvc.perform(delete("/api/v1/community/workflow/comments/" + cid)
+                            .header("Authorization", "Bearer " + user))
+                    .andExpect(jsonPath("$.data.deleted").value(true));
+        } finally { cleanupArticle(published); cleanupArticle(draft); }
+    }
+
+    @Test @Order(30)
+    void archiveAttachmentsAndWorkflowsWork() throws Exception {
+        String user = login(USER, USER_PW);
+        long certId = createCertificate(user, "BATCH4_CERT");
+        long rootId = 0, childId = 0, taskId = 0;
+        String fileId = null;
+        try {
+            MockMultipartFile file = new MockMultipartFile("file", "proof.pdf", "application/pdf", "BATCH4".getBytes());
+            MvcResult up = mvc.perform(multipart("/api/v1/files/file").file(file)
+                            .header("Authorization", "Bearer " + user))
+                    .andExpect(status().isOk()).andReturn();
+            String url = json.readTree(up.getResponse().getContentAsString()).path("data").path("url").asText();
+            assertTrue(url.startsWith("/files/"), "上传应返回本服务静态资源 URL");
+            fileId = url.substring(url.lastIndexOf('/') + 1);
+
+            mvc.perform(put("/api/v1/archive/workflow/attachments/bind")
+                            .header("Authorization", "Bearer " + user)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(json.writeValueAsString(Map.of("resource", "certificates", "id", certId, "url", url))))
+                    .andExpect(jsonPath("$.code").value(200));
+            assertEquals(url, jdbc.queryForObject("select file_url from certificate where id = ?", String.class, certId));
+            mvc.perform(put("/api/v1/archive/workflow/attachments/bind")
+                            .header("Authorization", "Bearer " + user)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(json.writeValueAsString(Map.of("resource", "certificates", "id", certId, "url", "https://evil.example/x"))))
+                    .andExpect(jsonPath("$.code").value(400));
+
+            rootId = createCourseNode(user, "{\"name\":\"BATCH4_ROOT\",\"nodeType\":\"分类\"}");
+            childId = createCourseNode(user, "{\"name\":\"BATCH4_CHILD\",\"parentId\":" + rootId + "}");
+            mvc.perform(delete("/api/v1/archive/workflow/course-tree/" + rootId)
+                            .header("Authorization", "Bearer " + user))
+                    .andExpect(jsonPath("$.data.promotedChildren").value(1));
+            Number parent = jdbc.queryForObject("select parent_id from course_tree_node where id = ?", Number.class, childId);
+            assertEquals(0L, parent.longValue(), "删除父节点后子节点应提升为根");
+
+            MvcResult task = mvc.perform(post("/api/v1/archive/r/thesis-board")
+                            .header("Authorization", "Bearer " + user)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"title\":\"BATCH4_TASK\",\"stage\":\"选题\",\"status\":\"待办\"}"))
+                    .andExpect(jsonPath("$.code").value(200)).andReturn();
+            taskId = json.readTree(task.getResponse().getContentAsString()).path("data").path("id").asLong();
+            mvc.perform(put("/api/v1/archive/workflow/thesis/" + taskId + "/stage")
+                            .header("Authorization", "Bearer " + user)
+                            .contentType(MediaType.APPLICATION_JSON).content("{\"next\":true}"))
+                    .andExpect(jsonPath("$.data.stage").value("开题"));
+            assertEquals(200, getJson("/api/v1/archive/workflow/elective/summary", user, 200).path("code").asInt());
+        } finally {
+            if (fileId != null) {
+                try { mvc.perform(delete("/api/v1/files/" + fileId).header("Authorization", "Bearer " + user)); }
+                catch (Exception ignored) { /* 清理失败不影响主断言 */ }
+            }
+            if (rootId != 0) jdbc.update("delete from course_tree_node where id = ?", rootId);
+            if (childId != 0) jdbc.update("delete from course_tree_node where id = ?", childId);
+            if (taskId != 0) jdbc.update("delete from thesis_board_item where id = ?", taskId);
+            jdbc.update("delete from certificate where id = ?", certId);
+        }
+    }
+
+    @Test @Order(31)
+    void publicAggregatesAndArchiveFeaturesAreAccountScoped() throws Exception {
+        String user = login(USER, USER_PW);
+        String admin = login(ADMIN, ADMIN_PW);
+        long draft = createArticle(user, "BATCH4_HIDDEN_GRAPH", "DRAFT", "BATCH4_SECRET_TAG", "BATCH4_SECRET_CAT");
+        long published = createArticle(user, "BATCH4_SHOWN_GRAPH", "PENDING", "BATCH4_PUBLIC_TAG", "BATCH4_PUBLIC_CAT");
+        approveArticle(admin, published);
+        long adminCert = createCertificate(admin, "BATCH4_ADMIN_ONLY_CERT");
+        try {
+            JsonNode tags = anonymousGet("/api/v1/community/tag-cloud").path("data");
+            assertFalse(tags.toString().contains("BATCH4_SECRET_TAG"), "标签云不得泄露草稿标签");
+            assertTrue(tags.toString().contains("BATCH4_PUBLIC_TAG"));
+            JsonNode graph = anonymousGet("/api/v1/community/knowledge-graph").path("data");
+            assertFalse(graph.toString().contains("BATCH4_HIDDEN_GRAPH"));
+            assertTrue(graph.toString().contains("BATCH4_SHOWN_GRAPH"));
+            assertFalse(anonymousGet("/api/v1/community/category-stats").path("data").toString()
+                    .contains("BATCH4_SECRET_CAT"));
+
+            assertFalse(getJson("/api/v1/archive/r/certificates", user, 200).path("data").toString()
+                    .contains("BATCH4_ADMIN_ONLY_CERT"), "档案列表不得跨账号");
+            mvc.perform(put("/api/v1/archive/r/certificates/" + adminCert)
+                            .header("Authorization", "Bearer " + user)
+                            .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"篡改\"}"))
+                    .andExpect(jsonPath("$.code").value(403));
+            assertFalse(getJson("/api/v1/archive/r/certificates?all=true", user, 200).path("data").toString()
+                    .contains("BATCH4_ADMIN_ONLY_CERT"), "普通用户 all=true 也必须按账号隔离");
+        } finally {
+            cleanupArticle(draft); cleanupArticle(published);
+            jdbc.update("delete from certificate where id = ?", adminCert);
+        }
+    }
+
+    private JsonNode anonymousGet(String path) throws Exception {
+        MvcResult r = mvc.perform(get(path)).andExpect(status().isOk()).andReturn();
+        return json.readTree(r.getResponse().getContentAsString());
+    }
+
+    private long createArticle(String token, String title, String status, String tags, String category) throws Exception {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("title", title); body.put("body", "正文 " + title);
+        body.put("tags", tags); body.put("category", category); body.put("status", status);
+        MvcResult r = mvc.perform(post("/api/v1/community/workflow/contents")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(body)))
+                .andExpect(jsonPath("$.code").value(200)).andReturn();
+        return json.readTree(r.getResponse().getContentAsString()).path("data").path("id").asLong();
+    }
+
+    private void approveArticle(String admin, long id) throws Exception {
+        mvc.perform(put("/api/v1/admin/contents/" + id + "/review")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"action\":\"APPROVE\"}"))
+                .andExpect(jsonPath("$.code").value(200));
+    }
+
+    private void cleanupArticle(long id) {
+        jdbc.update("delete from content_comment where content_id = ?", id);
+        jdbc.update("delete from like_record where content_id = ?", id);
+        jdbc.update("delete from favorite_record where content_id = ?", id);
+        jdbc.update("delete from content where id = ?", id);
+    }
+
+    private long createCertificate(String token, String name) throws Exception {
+        MvcResult r = mvc.perform(post("/api/v1/archive/r/certificates")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of("name", name, "issuer", "集成测试"))))
+                .andExpect(jsonPath("$.code").value(200)).andReturn();
+        return json.readTree(r.getResponse().getContentAsString()).path("data").path("id").asLong();
+    }
+
+    private long createCourseNode(String token, String payload) throws Exception {
+        MvcResult r = mvc.perform(post("/api/v1/archive/workflow/course-tree")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON).content(payload))
+                .andExpect(jsonPath("$.code").value(200)).andReturn();
+        return json.readTree(r.getResponse().getContentAsString()).path("data").path("id").asLong();
     }
 }

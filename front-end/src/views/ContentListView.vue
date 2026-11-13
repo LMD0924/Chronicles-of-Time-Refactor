@@ -1,21 +1,24 @@
 <script setup>
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { feature } from '@/api'
 import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
 
-const list = ref([]), hot = ref([]), cats = ref({})
-const keyword = ref(''), category = ref('')
+const list = ref([]), hot = ref([]), cats = ref({}), tags = ref({})
+const keyword = ref(''), category = ref(''), tag = ref(''), sort = ref('newest')
 const loading = ref(true), error = ref('')
+const filters = [
+  { key: 'newest', label: '最新' }, { key: 'hot', label: '最多浏览' }, { key: 'likes', label: '最多点赞' }
+]
 
 async function load() {
   loading.value = true; error.value = ''
   try {
-    const [l, h, c] = await Promise.all([
-      feature.searchContents({ keyword: keyword.value, category: category.value }),
-      feature.hotContents(5), feature.categoryStats()
+    const [l, h, c, t] = await Promise.all([
+      feature.searchContents({ keyword: keyword.value, category: category.value, tag: tag.value, sort: sort.value }),
+      feature.hotContents(5), feature.categoryStats(), feature.tagCloud()
     ])
-    list.value = l || []; hot.value = h || []; cats.value = c || {}
+    list.value = l || []; hot.value = h || []; cats.value = c || {}; tags.value = t || {}
   } catch (e) { error.value = e.message }
   finally { loading.value = false }
 }
@@ -23,42 +26,57 @@ function summary(c) {
   const s = c.summary || c.body || ''
   return s.length > 90 ? s.slice(0, 90) + '…' : s
 }
+const tagList = computed(() => Object.keys(tags.value).slice(0, 18))
+function pickTag(t) { tag.value = tag.value === t ? '' : t; load() }
 onMounted(load)
-watch(category, load)
+watch([category, sort], load)
 </script>
 
 <template>
   <section>
     <PageHeader eyebrow="COMMUNITY / FEED" title="内容广场"
-      description="文章、随笔与复盘集中在这里；游客可读，发布与互动需要登录。"
+      description="只展示已通过审核的文章；游客可读，投稿、评论与点赞收藏需要登录。"
       :actions="[{ label: '写文章', icon: '✎', color: 'mint', to: '/community/publish' }, { label: '文章图谱', icon: '⌘', color: 'violet', to: '/community/graph' }, { label: '标签洞察', icon: '◈', color: 'amber', to: '/community/tags' }]" />
 
     <div class="crud-toolbar">
-      <input v-model="keyword" class="field max-w-[280px]" placeholder="搜索标题、正文或标签…" @keyup.enter="load" />
-      <select v-model="category" class="field max-w-[180px]">
+      <input v-model="keyword" class="field max-w-[260px]" placeholder="搜索标题、正文或标签…" @keyup.enter="load" />
+      <select v-model="category" class="field max-w-[170px]">
         <option value="">全部分类</option>
         <option v-for="(v, k) in cats" :key="k" :value="k">{{ k }} ({{ v }})</option>
       </select>
       <button class="btn btn-blue" @click="load"><span class="btn-glyph">⌕</span> 检索</button>
+      <div class="ml-auto flex gap-1">
+        <button v-for="f in filters" :key="f.key" class="pill" :class="sort === f.key ? 'pill-rose' : 'pill-neutral'" @click="sort = f.key">{{ f.label }}</button>
+      </div>
       <span class="pill pill-sky">共 {{ list.length }} 篇</span>
+    </div>
+    <div v-if="tagList.length" class="mb-4 flex flex-wrap items-center gap-1.5">
+      <span class="text-[11px] faint">标签：</span>
+      <button v-for="t in tagList" :key="t" class="pill" :class="tag === t ? 'pill-amber' : 'pill-neutral'" @click="pickTag(t)">{{ t }} ×{{ tags[t] }}</button>
+      <button v-if="tag" class="btn btn-slate" @click="tag = ''; load()">清除</button>
     </div>
     <p v-if="error" class="pill pill-rose mb-4">{{ error }}</p>
 
     <div class="grid gap-5 md:grid-cols-[1fr_300px]">
       <div>
         <div v-if="loading" class="space-y-3"><div v-for="i in 3" :key="i" class="placeholder-bar" style="height:110px"></div></div>
-        <EmptyState v-else-if="!list.length" text="还没有文章" hint="换个关键词，或去写一篇" />
+        <EmptyState v-else-if="!list.length" text="还没有已发布的文章" hint="换个关键词，或去写一篇投稿" />
         <div v-else class="space-y-3">
           <RouterLink v-for="c in list" :key="c.id" :to="`/community/${c.id}`" class="glass lift block p-5" v-reveal="1">
-            <div class="flex flex-wrap items-center gap-2">
-              <span class="pill pill-rose">{{ c.category || '随笔' }}</span>
-              <span class="text-[11px] faint">{{ c.createdAt }}</span>
-              <span class="ml-auto text-[11px] faint">♡ {{ c.likeCount || 0 }} · ☆ {{ c.favoriteCount || 0 }}</span>
+            <div class="flex gap-4">
+              <img v-if="c.coverUrl" :src="c.coverUrl" alt="封面" class="h-[86px] w-[130px] flex-none rounded-lg object-cover" />
+              <div class="min-w-0 flex-1">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="pill pill-rose">{{ c.category || '随笔' }}</span>
+                  <span class="text-[11px] faint">{{ c.createdAt }}</span>
+                  <span class="ml-auto text-[11px] faint">浏览 {{ c.viewCount || 0 }} · ♡ {{ c.likeCount || 0 }} · ☆ {{ c.favoriteCount || 0 }}</span>
+                </div>
+                <h2 class="mt-2 text-[16px] font-semibold ink">{{ c.title }}</h2>
+                <p class="mt-2 text-[12px] leading-6 muted">{{ summary(c) }}</p>
+              </div>
             </div>
-            <h2 class="mt-2 text-[16px] font-semibold ink">{{ c.title }}</h2>
-            <p class="mt-2 text-[12px] leading-6 muted">{{ summary(c) }}</p>
             <div class="mt-3 flex flex-wrap gap-1.5">
-              <span v-for="t in String(c.tags || '').split('[,，;；]')" :key="t" class="pill pill-neutral">{{ t }}</span>
+              <span v-for="t in String(c.tags || '').split(/[,，;；]/).filter(Boolean)" :key="t" class="pill pill-neutral">{{ t }}</span>
             </div>
           </RouterLink>
         </div>
@@ -74,7 +92,7 @@ watch(category, load)
         <div class="glass p-5">
           <h2 class="section-title mb-3">分类统计</h2>
           <div class="flex flex-wrap gap-2">
-            <span v-for="(v, k) in cats" :key="k" class="pill pill-sky">{{ k }} · {{ v }}</span>
+            <button v-for="(v, k) in cats" :key="k" class="pill" :class="category === k ? 'pill-rose' : 'pill-sky'" @click="category = category === k ? '' : k">{{ k }} · {{ v }}</button>
             <span v-if="!Object.keys(cats).length" class="text-[12px] muted">暂无数据</span>
           </div>
         </div>
