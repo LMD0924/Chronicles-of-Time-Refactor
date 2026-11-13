@@ -152,11 +152,41 @@ public class PlanningApplicationService {
         return m;
     }
 
-    /** 供领域特性接口复用的原始数据视图。 */
+    /** 供领域特性接口复用的原始数据视图（全量，仅供内部/管理员统计使用）。 */
     public List<Map<String, Object>> rows(String resource) {
         return list(resource, true, null).stream()
                 .map(r -> (Map<String, Object>) json.convertValue(r, Map.class))
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * 特性接口默认使用：按当前账号隔离；管理员显式 all=true 时可跨账号核查。
+     * 字典类资源（owned=false，如 subject-options / major-requirements）本来就是全局共享。
+     */
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> rowsScoped(String resource, boolean all) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Object r : list(resource, all, null)) {
+            out.add((Map<String, Object>) json.convertValue(r, Map.class));
+        }
+        return out;
+    }
+
+    /** 按单列精确查找（工作流内部使用，如按 id / planId 定位）。显式循环避免 raw Repository 泛型推断问题。 */
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> findBy(String resource, String column, Object value) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Object r : require(resource).findBy(column, value)) {
+            out.add((Map<String, Object>) json.convertValue(r, Map.class));
+        }
+        return out;
+    }
+
+    /** 按 id 读取并转成 Map；找不到返回 null。 */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> row(String resource, Long id) {
+        Object r = get(resource, id);
+        return r == null ? null : (Map<String, Object>) json.convertValue(r, Map.class);
     }
 
     private Repository require(String resource) {

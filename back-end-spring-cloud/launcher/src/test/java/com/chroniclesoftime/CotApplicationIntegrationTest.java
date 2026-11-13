@@ -557,6 +557,206 @@ class CotApplicationIntegrationTest {
         }
     }
 
+    // ---------------------------------------------------------------- 批次 3：规划工作流与免登录分享
+
+    @Test @Order(20)
+    void shareLinkCanBeCreatedAndViewedWithoutLogin() throws Exception {
+        assertNotNull(jdbc.queryForObject("select count(*) from share_link", Integer.class), "V7 应建好 share_link 表");
+        String user = login(USER, USER_PW);
+        MvcResult r = mvc.perform(post("/api/v1/planning/share-links")
+                        .header("Authorization", "Bearer " + user)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of("title", "BATCH3_SHARE", "days", 7))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andReturn();
+        JsonNode data = json.readTree(r.getResponse().getContentAsString()).path("data");
+        String token = data.path("token").asText();
+        long id = data.path("id").asLong();
+        assertFalse(token.isBlank(), "必须返回随机 token");
+        assertTrue(data.path("url").asText().endsWith(token));
+        try {
+            // 完全不带 Authorization：公开只读端点应放行，且只返回汇总与节点
+            MvcResult view = mvc.perform(get("/api/v1/timeline/share/" + token))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.code").value(200))
+                    .andExpect(jsonPath("$.data.title").value("BATCH3_SHARE"))
+                    .andReturn();
+            JsonNode body = json.readTree(view.getResponse().getContentAsString()).path("data");
+            assertTrue(body.path("stats").has("records"), "应返回汇总统计");
+            assertFalse(body.toString().contains("userId"), "公开视图不得泄露 user_id");
+            assertFalse(body.toString().contains("password"), "公开视图不得泄露账号信息");
+            assertEquals(1, jdbc.queryForObject("select view_count from share_link where id = ?", Integer.class, id),
+                    "每次公开访问应累加访问次数");
+        } finally {
+            jdbc.update("delete from share_link where id = ?", id);
+        }
+    }
+
+    @Test @Order(21)
+    void revokedExpiredAndDeletedShareLinksAreRejected() throws Exception {
+        String user = login(USER, USER_PW);
+        MvcResult r = mvc.perform(post("/api/v1/planning/share-links")
+                        .header("Authorization", "Bearer " + user)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"BATCH3_LIFECYCLE\",\"days\":7}"))
+                .andExpect(jsonPath("$.code").value(200)).andReturn();
+        JsonNode data = json.readTree(r.getResponse().getContentAsString()).path("data");
+        String token = data.path("token").asText();
+        long id = data.path("id").asLong();
+        try {
+            mvc.perform(put("/api/v1/planning/share-links/" + id + "/revoke")
+                            .header("Authorization", "Bearer " + user))
+                    .andExpect(jsonPath("$.data.revoked").value(true));
+            mvc.perform(get("/api/v1/timeline/share/" + token))
+                    .andExpect(jsonPath("$.code").value(404));
+
+            mvc.perform(put("/api/v1/planning/share-links/" + id + "/renew")
+                            .header("Authorization", "Bearer " + user)
+                            .contentType(MediaType.APPLICATION_JSON).content("{\"days\":7}"))
+                    .andExpect(jsonPath("$.data.revoked").value(false));
+            mvc.perform(get("/api/v1/timeline/share/" + token))
+                    .andExpect(jsonPath("$.code").value(200));
+
+            jdbc.update("update share_link set expires_at = ? where id = ?", "2020-01-01 00:00:00", id);
+            mvc.perform(get("/api/v1/timeline/share/" + token))
+                    .andExpect(jsonPath("$.code").value(404));
+
+            mvc.perform(delete("/api/v1/planning/share-links/" + id)
+                            .header("Authorization", "Bearer " + user))
+                    .andExpect(jsonPath("$.data.deleted").value(true));
+            assertEquals(0, jdbc.queryForObject("select count(*) from share_link where id = ?", Integer.class, id));
+        } finally {
+            jdbc.update("delete from share_link where id = ?", id);
+        }
+    }
+
+    @Test @Order(22)
+    void shareLinksAndPlanningFeaturesAreAccountScoped() throws Exception {
+        String admin = login(ADMIN, ADMIN_PW);
+        MvcResult r = mvc.perform(post("/api/v1/planning/share-links")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"ADMIN_BATCH3_SHARE\",\"days\":7}"))
+                .andExpect(jsonPath("$.code").value(200)).andReturn();
+        JsonNode data = json.readTree(r.getResponse().getContentAsString()).path("data");
+        String adminToken = data.path("token").asText();
+        long linkId = data.path("id").asLong();
+        long planId = createReviewPlan(admin, "ADMIN_BATCH3_PLAN");
+        try {
+            String user = login(USER, USER_PW);
+            JsonNode links = getJson("/api/v1/planning/share-links", user, 200).path("data");
+            assertFalse(links.toString().contains(adminToken), "分享链接列表不得泄露其他账号的链接");
+            mvc.perform(put("/api/v1/planning/share-links/" + linkId + "/revoke")
+                            .header("Authorization", "Bearer " + user))
+                    .andExpect(jsonPath("$.code").value(403));
+            JsonNode board = getJson("/api/v1/planning/workflow/review/board", user, 200).path("data");
+            assertFalse(board.path("items").toString().contains("ADMIN_BATCH3_PLAN"),
+                    "复习看板不得泄露其他账号的计划");
+            JsonNode overview = getJson("/api/v1/planning/workflow/overview", user, 200).path("data");
+            assertFalse(overview.toString().contains("ADMIN_BATCH3_PLAN"));
+        } finally {
+            jdbc.update("delete from share_link where id = ?", linkId);
+            jdbc.update("delete from review_plan where id = ?", planId);
+        }
+    }
+
+    @Test @Order(23)
+    void reviewProgressAndMilestoneDecomposition() throws Exception {
+        String user = login(USER, USER_PW);
+        long id = createReviewPlan(user, "BATCH3_REVIEW");
+        String note = "由复习计划 #" + id + " 分解生成";
+        try {
+            mvc.perform(put("/api/v1/planning/workflow/review/" + id + "/progress")
+                            .header("Authorization", "Bearer " + user)
+                            .contentType(MediaType.APPLICATION_JSON).content("{\"progress\":100}"))
+                    .andExpect(jsonPath("$.code").value(200));
+            assertEquals(100, jdbc.queryForObject("select progress from review_plan where id = ?", Integer.class, id));
+            assertEquals("已完成", jdbc.queryForObject("select status from review_plan where id = ?", String.class, id),
+                    "进度 100% 应自动置为已完成");
+
+            mvc.perform(post("/api/v1/planning/workflow/review/" + id + "/milestones")
+                            .header("Authorization", "Bearer " + user)
+                            .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                    .andExpect(jsonPath("$.data.created").value(4));
+            assertEquals(4, jdbc.queryForObject("select count(*) from target_path where note = ?", Integer.class, note));
+
+            mvc.perform(put("/api/v1/planning/workflow/review/" + id + "/progress")
+                            .header("Authorization", "Bearer " + user)
+                            .contentType(MediaType.APPLICATION_JSON).content("{\"progress\":0}"))
+                    .andExpect(jsonPath("$.code").value(200));
+            assertEquals("未开始", jdbc.queryForObject("select status from review_plan where id = ?", String.class, id));
+        } finally {
+            jdbc.update("delete from target_path where note = ?", note);
+            jdbc.update("delete from review_plan where id = ?", id);
+        }
+    }
+
+    @Test @Order(24)
+    void checklistToggleAndGradingConversion() throws Exception {
+        String user = login(USER, USER_PW);
+        MvcResult r = mvc.perform(post("/api/v1/planning/r/checklist-items")
+                        .header("Authorization", "Bearer " + user)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"BATCH3_CHECK\",\"category\":\"集成测试\",\"done\":false}"))
+                .andExpect(jsonPath("$.code").value(200)).andReturn();
+        long id = json.readTree(r.getResponse().getContentAsString()).path("data").path("id").asLong();
+        try {
+            mvc.perform(put("/api/v1/planning/workflow/checklist/" + id + "/toggle")
+                            .header("Authorization", "Bearer " + user))
+                    .andExpect(jsonPath("$.data.item.done").value(true))
+                    .andExpect(jsonPath("$.data.completionRate").exists());
+            assertEquals(1, jdbc.queryForObject("select count(*) from checklist_item where id = ? and done = 1",
+                    Integer.class, id));
+            mvc.perform(put("/api/v1/planning/workflow/checklist/" + id + "/toggle")
+                            .header("Authorization", "Bearer " + user))
+                    .andExpect(jsonPath("$.data.item.done").value(false));
+        } finally {
+            jdbc.update("delete from checklist_item where id = ?", id);
+        }
+        mvc.perform(post("/api/v1/planning/workflow/grading/convert")
+                        .header("Authorization", "Bearer " + user)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"score\":85}"))
+                .andExpect(jsonPath("$.data.score").value(85));
+    }
+
+    @Test @Order(25)
+    void planningWorkflowAggregatesAreAvailable() throws Exception {
+        String user = login(USER, USER_PW);
+        for (String path : new String[]{
+                "/api/v1/planning/workflow/overview",
+                "/api/v1/planning/workflow/quality/summary",
+                "/api/v1/planning/workflow/combinations/tree",
+                "/api/v1/planning/workflow/majors/match?subjects=物理,化学",
+                "/api/v1/planning/workflow/gap/check",
+                "/api/v1/planning/workflow/schedule/grid",
+                "/api/v1/planning/selection/statistics",
+                "/api/v1/planning/schedule",
+                "/api/v1/planning/compare",
+        }) {
+            assertEquals(200, getJson(path, user, 200).path("code").asInt(), "端点应可用: " + path);
+        }
+        mvc.perform(post("/api/v1/planning/workflow/gpa/whatif")
+                        .header("Authorization", "Bearer " + user)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"targetGpa\":3.8,\"adjustments\":[]}"))
+                .andExpect(jsonPath("$.data.currentGpa").exists())
+                .andExpect(jsonPath("$.data.simulatedGpa").exists());
+    }
+
+    private long createReviewPlan(String token, String title) throws Exception {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("subject", "集成测试"); body.put("title", title);
+        body.put("content", "批次3 集成测试用"); body.put("targetDate", "2026-12-31");
+        body.put("progress", 0); body.put("status", "未开始");
+        MvcResult r = mvc.perform(post("/api/v1/planning/r/review-plans")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(body)))
+                .andExpect(jsonPath("$.code").value(200)).andReturn();
+        return json.readTree(r.getResponse().getContentAsString()).path("data").path("id").asLong();
+    }
+
     private Map<String, Object> question(String subject, String kp, String title, String answer) {
         Map<String, Object> q = new LinkedHashMap<>();
         q.put("subject", subject); q.put("knowledgePoint", kp);

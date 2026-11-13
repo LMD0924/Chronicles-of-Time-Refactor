@@ -1,9 +1,11 @@
 <script setup>
 import { ref } from 'vue'
+import { useRoute } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import { seamKey, seamActive, pulseTimeline } from '@/composables/useTimelineTransition'
 
 const build = ref('P1 · 全量交付')
+const route = useRoute()
 </script>
 
 <template>
@@ -15,9 +17,10 @@ const build = ref('P1 · 全量交付')
   </div>
 
   <div class="relative z-10 flex min-h-[100dvh] flex-col">
-    <AppHeader />
+    <AppHeader v-if="!route.meta.public" />
 
-    <main class="mx-auto w-full max-w-[1200px] flex-1 px-5 pb-16 pt-[110px] md:px-8 md:pt-[124px]">
+    <main class="mx-auto w-full max-w-[1200px] flex-1 px-5 pb-16 md:px-8"
+          :class="route.meta.public ? 'pt-10' : 'pt-[110px] md:pt-[124px]'">
       <RouterView v-slot="{ Component, route }">
         <Transition name="page" mode="out-in" @before-enter="pulseTimeline">
           <component :is="Component" :key="route.path" />
